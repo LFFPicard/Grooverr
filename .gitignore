@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.db
+*.db-wal
+*.db-shm
+
+# Node
+node_modules/
+dist/
+
+# OS
+.DS_Store

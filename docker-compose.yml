@@ -1,0 +1,13 @@
+version: "3"
+
+services:
+  grooverr:
+    build: .
+    image: lffpicard/grooverr:latest
+    container_name: Grooverr
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - /path/to/your/music:/music
+      - /path/to/appdata/Grooverr:/config
