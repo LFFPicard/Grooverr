@@ -1,3 +1,6 @@
 -r requirements.txt
 pytest==9.1.1
 pytest-asyncio==1.4.0
+# Bundled static ffmpeg for dev machines without a system ffmpeg
+# (the Docker image installs ffmpeg via apt).
+imageio-ffmpeg==0.6.0
