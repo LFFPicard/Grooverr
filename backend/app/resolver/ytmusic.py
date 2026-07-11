@@ -125,6 +125,13 @@ class YouTubeMusicClient:
         results = results if isinstance(results, list) else []
         return [_parse_track(r) for r in results if isinstance(r, dict)]
 
+    def search_videos(self, query: str, limit: int = 10) -> list[ResolvedTrack]:
+        """Plain YouTube video search — the last-resort audio-source fallback
+        (Section 7.3 step 3) when no YT Music song matches."""
+        results = self._yt.search(query, filter="videos", limit=limit)
+        results = results if isinstance(results, list) else []
+        return [_parse_track(r) for r in results if isinstance(r, dict)]
+
     def search_albums(self, query: str, limit: int = 10) -> list[ResolvedAlbum]:
         results = self._yt.search(query, filter="albums", limit=limit)
         albums = []
