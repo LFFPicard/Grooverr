@@ -22,8 +22,8 @@ When starting a new session/batch with the coding agent, paste in:
 
 Grooverr is a self-hosted music acquisition and library manager. The workflow is:
 
-1. **Search** — for a track, album, artist, or paste a Spotify/YouTube Music playlist link (same interaction model as Overseerr/Ombi searching for movies/TV)
-2. **Resolve** — Grooverr finds canonical metadata (via MusicBrainz primarily) and locates the best-matching audio source (Spotify or YouTube Music)
+1. **Search** — for a track, album, artist, or paste a YouTube Music playlist link (same interaction model as Overseerr/Ombi searching for movies/TV)
+2. **Resolve** — Grooverr finds canonical metadata (via MusicBrainz primarily) and locates the best-matching audio source (YouTube Music)
 3. **Download** — audio is fetched, tagged, and named to a strict, predictable convention (MusicBrainz Picard-compatible)
 4. **Organize** — files land in a folder structure that Plex, Navidrome, Jellyfin, or any scraper can read without further massaging
 5. **Track** — a library view shows what's downloaded, what's incomplete (e.g. an album missing 3 of 12 tracks), what's queued, and what's actively downloading — modeled on Lidarr's UX
@@ -47,9 +47,9 @@ The end state: drop in an artist, album, track, or playlist link, and Grooverr p
 ## 3. Goals and non-goals
 
 ### Goals
-- Search and resolve music by track, album, artist, or playlist (Spotify or YouTube Music links, or free-text search)
+- Search and resolve music by track, album, artist, or playlist (YouTube Music links, or free-text search)
 - Download audio at a **user-configurable quality ceiling** per download (not a fixed global setting)
-- Tag files using **MusicBrainz as the primary metadata source**, falling back to Spotify then YouTube Music data if MusicBrainz has no match
+- Tag files using **MusicBrainz as the primary metadata source**, falling back to YouTube Music data if MusicBrainz has no match
 - Output files in a MusicBrainz Picard-compatible naming/folder convention (Section 6)
 - A library browser showing completeness per album (X of Y tracks), with one-click "complete this album" to queue the missing tracks
 - A live queue view: metadata resolution queue + download queue, separately visible
@@ -63,7 +63,7 @@ The end state: drop in an artist, album, track, or playlist link, and Grooverr p
 - Built-in music player (this is a library *acquisition and organization* tool, playback is Plex/Navidrome/Jellyfin's job)
 - Automatic "watch this artist for new releases" (may be a v2 feature — flagged in backlog, not built now)
 - Lyrics embedding (may be added later, not a v1 requirement)
-- Any Spotify audio ripping / DRM circumvention. Audio is always sourced from YouTube Music (or YouTube as fallback); Spotify is used strictly as a **metadata and search source**, never as an audio source.
+- Any Spotify integration whatsoever. Spotify required a Premium developer account, hit API app-creation limits, and returned inconsistently-shaped data during the spotDL-GUI build — not worth the dependency for a "download music you already have the right to" tool. **MusicBrainz + YouTube Music cover the full feature set**, including playlist import (via YouTube Music links).
 
 ---
 
@@ -76,9 +76,9 @@ The end state: drop in an artist, album, track, or playlist link, and Grooverr p
 | **Database** | SQLite, **WAL mode mandatory** | Simplicity of a single-file DB, but WAL mode allows concurrent reads while background workers write — critical so browsing the library never blocks on an active download. See Section 9. |
 | **ORM** | SQLModel (or SQLAlchemy 2.0 core) | Type-safe, integrates cleanly with FastAPI's Pydantic models |
 | **Background task/queue** | Native `asyncio` task workers with a persisted job table (no Redis/Celery) | Per user preference — keep the stack to a single container. Job state is persisted to SQLite so a container restart doesn't lose queue state (Section 9.3). |
-| **Metadata — primary** | MusicBrainz API (`musicbrainzngs` or direct REST) | Most accurate canonical tagging data, per user preference |
-| **Metadata — fallback** | Spotify Web API, then YouTube Music (`ytmusicapi`) | Used only if MusicBrainz has no match for a given search |
-| **Audio search/resolution** | `ytmusicapi` for matching, `yt-dlp` for the actual audio fetch | YouTube Music is the *only* audio source. Spotify is metadata-only (see non-goals). |
+| **Metadata — primary** | MusicBrainz API (`musicbrainzngs` or direct REST) | Most accurate canonical tagging data, per user preference. No API key required. |
+| **Metadata — fallback + playlists** | YouTube Music (`ytmusicapi`) | Used if MusicBrainz has no match for a given search, and as the source for playlist link resolution |
+| **Audio search/resolution** | `ytmusicapi` for matching, `yt-dlp` for the actual audio fetch | YouTube Music is the sole audio and playlist source. No Spotify dependency anywhere in the stack. |
 | **Tagging** | `mutagen` | Writes ID3/Vorbis/MP4 tags depending on output format, handles embedded album art |
 | **Frontend framework** | React + Vite | Fast dev/build, matches existing frontend experience |
 | **Styling** | Tailwind CSS, custom design tokens (Section 8) | Utility-first, fast to build the specific "Sleeve Catalog" look without fighting a component library's opinions |
@@ -188,16 +188,16 @@ Rules:
 ## 7. Core workflows
 
 ### 7.1 Search & Add
-1. User types a free-text query, or pastes a Spotify/YouTube Music URL, into the search bar
+1. User types a free-text query, or pastes a YouTube Music URL, into the search bar
 2. If it's a URL: detect type (track/album/artist/playlist) and resolve directly
-3. If it's free text: query MusicBrainz first; if no confident match, fall back to Spotify search, then YouTube Music search
+3. If it's free text: query MusicBrainz first; if no confident match, fall back to YouTube Music search
 4. Results shown as cards (track/album/artist/playlist), user picks one or more to add
 5. Adding creates `Album`/`Track` rows with `status=missing`, and enqueues a `metadata_resolve` job per track (or per album, resolving all child tracks in one pass where the source supports it)
 
 ### 7.2 Metadata resolution pipeline
 1. Worker picks up a `metadata_resolve` QueueItem
 2. Query MusicBrainz for canonical release/track data using best available identifiers (ISRC if we have it, else artist+title+album fuzzy match)
-3. If no MusicBrainz match found, fall back to Spotify metadata, then YouTube Music metadata
+3. If no MusicBrainz match found, fall back to YouTube Music metadata
 4. Populate/patch the `Track`/`Album`/`Artist` rows with whatever was found
 5. Enqueue a `download` QueueItem for the track
 
@@ -259,7 +259,7 @@ Dark mode variant (toggle, not default) — see the reference mockup for exact d
 2. **Search** — search bar (same as dashboard's, or a dedicated larger version), result cards for tracks/albums/artists/playlists, "Add to library" action per result
 3. **Library** — full browsable grid of all albums, filterable by artist / completeness status / format, each card shows the completion badge pattern from the dashboard mockup. Clicking an album opens an **Album Detail** view listing every track with its individual status (downloaded / missing / queued / error) and a per-track "download this one" action
 4. **Queue** — full queue view (not just the dashboard teaser), split into Resolving / Downloading tabs, with retry/cancel per item
-5. **Settings** — API credentials (MusicBrainz doesn't need a key but rate-limits by user-agent string; Spotify Client ID/Secret; optional YouTube cookie file upload exactly like the spotDL-GUI pattern already proven), default quality ceiling, output path template editor, theme toggle
+5. **Settings** — API credentials (MusicBrainz doesn't need a key but rate-limits by user-agent string; optional YouTube cookie file upload exactly like the spotDL-GUI pattern already proven), default quality ceiling, output path template editor, theme toggle
 
 ### Non-negotiable UX requirements
 - Every async action (add to library, retry, cancel, complete album) gives immediate visual feedback — optimistic UI update, don't wait for a full refetch
@@ -322,14 +322,15 @@ Each batch below is scoped to be a self-contained agent session. **Confirm the "
 ### Batch 2 — Metadata resolution engine
 **Scope:**
 - MusicBrainz client wrapper (search by artist/title/album, fetch release+recording data, respect their rate limit with a proper user-agent string)
-- Spotify client wrapper (search + track/album/artist lookup, using stored credentials from Settings)
-- YouTube Music client wrapper (`ytmusicapi` — search only, no downloading yet)
-- The fallback chain logic from Section 7.2: MusicBrainz → Spotify → YouTube Music
+- YouTube Music client wrapper (`ytmusicapi` — search + playlist resolution, no downloading yet)
+- The fallback chain logic from Section 7.2: MusicBrainz → YouTube Music
+- All fields pulled from external API responses **must** use safe `.get()` access with defaults, never direct dict indexing (`data["field"]`) — this is a direct lesson from the spotDL-GUI build, where unsafe indexing caused repeated KeyError crashes as the Spotify API's response shape changed under us. Do not repeat that pattern here.
 - Unit-testable as a standalone module (no UI needed yet) — a CLI script or test suite that takes a query and prints resolved metadata is sufficient to verify this batch
 
 **Definition of done:**
 - Given a track title + artist, the resolver returns canonical metadata with MusicBrainz ID when available, correct fallback when it's not
-- Given a Spotify or YouTube Music URL, the resolver detects the type and resolves correctly
+- Given a YouTube Music track, album, artist, or playlist URL, the resolver detects the type and resolves correctly
+- No unsafe dict indexing anywhere in the resolver code — verified by review, not just by it happening to work on today's API responses
 
 ---
 
@@ -402,7 +403,7 @@ Each batch below is scoped to be a self-contained agent session. **Confirm the "
 
 ### Batch 8 — Settings screen + credential handling
 **Scope:**
-- Settings UI: MusicBrainz user-agent config, Spotify Client ID/Secret, YouTube cookie file upload (reuse the exact drag-and-drop pattern already proven working in spotDL-GUI — use a `<label for=>` wrapping the hidden file input, not an `onclick` handler, per the lesson learned there), default quality ceiling, output path template editor with live preview
+- Settings UI: MusicBrainz user-agent config, YouTube cookie file upload (reuse the exact drag-and-drop pattern already proven working in spotDL-GUI — use a `<label for=>` wrapping the hidden file input, not an `onclick` handler, per the lesson learned there), default quality ceiling, output path template editor with live preview
 - Credentials stored in `/config` volume, never in the music output volume (same security pattern as spotDL-GUI)
 
 **Definition of done:**
@@ -428,7 +429,7 @@ Each batch below is scoped to be a self-contained agent session. **Confirm the "
 ### Batch 10 — Hardening pass
 **Scope:**
 - Error handling audit — every failure mode in the pipeline (no MusicBrainz match, no YouTube Music match, network failure mid-download, disk full, malformed metadata) surfaces a clear, specific error in the UI rather than a silent failure or generic 500
-- Rate limit handling for MusicBrainz (they are strict — 1 request/second per their usage policy) and Spotify
+- Rate limit handling for MusicBrainz (they are strict — 1 request/second per their usage policy)
 - Load test: seed a large library, hammer the queue with 50+ simultaneous adds, confirm no deadlocks or corrupted queue state
 - Final performance pass against the Section 9.5 benchmarks
 
@@ -443,10 +444,14 @@ Each batch below is scoped to be a self-contained agent session. **Confirm the "
 Track anything the agent has to assume here so it can be reviewed and corrected rather than silently baked in:
 
 - **Assumed:** Output formats supported = mp3, flac, m4a, opus, wav, ogg (same set as spotDL-GUI). Confirm if this should change.
-- **Assumed:** Spotify credentials are optional — if not configured, MusicBrainz + YouTube Music alone are sufficient for resolution and search (Spotify only adds playlist-link support and a metadata fallback). Confirm this is acceptable, since Spotify Developer API access requires a Premium account as established during the spotDL-GUI build.
+- **Resolved:** Spotify integration dropped entirely (see Non-goals, Section 3). MusicBrainz is primary metadata, YouTube Music is fallback metadata + playlist source + audio source. No Premium account or developer app dependency anywhere in the stack.
 - **Assumed:** No built-in scheduler for "watch artist for new releases" in v1 — flagged as a backlog item, not built now.
 - **Open:** Exact logo asset — placeholder monogram until a real logo is supplied.
 - **Open:** Whether genre tagging pulls from MusicBrainz's genre/tag data or is left blank when unavailable — needs a decision before Batch 3.
+- **Assumed (Batch 2):** "Canonical release" selection was undefined. A recording/album often exists as original pressing, promos, vinyl, and anniversary reissues, all scoring 100 in MB search — and the reissue can have a different `total_tracks` (RAM: 13 vs 22), which would corrupt completeness tracking. Heuristic implemented: exact title match > Official status > Album-type release group > CD/Digital Media pressing > earliest release date. Additionally, exact title+artist matches are admitted down to `min_score − 10`, because MB's Lucene relevance under-scores originals relative to remasters (observed live: original RAM recording scored 84, the 2023 remaster 100).
+- **Assumed (Batch 2):** Resolver populates `genre` from MusicBrainz genre votes (release-level first, falling back to release-group where the community votes actually live), picking the highest-voted name; null when MB has none. YouTube Music provides no genre. This partially answers the open genre question above — Batch 3 just tags what the resolver provides and leaves genre blank otherwise.
+- **Noted (Batch 2):** YouTube Music search returns *something* for almost any query, including gibberish — so the MB→YTM fallback virtually never yields "no match", it yields a low-quality match with `source: youtube-music`. The duration-tolerance matching at download time (Section 7.3, Batch 3) is the real anti-mismatch gate; the UI should also surface the metadata source per track so a YTM-only resolution is visible.
+- **Noted (Batch 2):** MusicBrainz search results title tracks by *recording*, which can carry hidden-track annotations ("Supersymmetry / [unknown]"); the resolver prefers the release's track title, which is what Picard tags with.
 
 ---
 
