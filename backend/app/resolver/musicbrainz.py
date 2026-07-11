@@ -85,6 +85,51 @@ def _album_type(release: dict) -> Optional[str]:
     return None
 
 
+def _top_genre(release: dict) -> Optional[str]:
+    """Highest-vote genre name. Release-level genres are usually empty on
+    MusicBrainz; release-group genres carry the community votes, so both
+    are checked (release first, as the more specific of the two)."""
+    group = release.get("release-group")
+    candidates = []
+    for entity in (release, group if isinstance(group, dict) else {}):
+        genres = entity.get("genres")
+        if isinstance(genres, list) and genres:
+            candidates = [g for g in genres if isinstance(g, dict) and g.get("name")]
+            if candidates:
+                break
+    if not candidates:
+        return None
+    best = max(candidates, key=lambda g: g.get("count") if isinstance(g.get("count"), int) else 0)
+    return best.get("name")
+
+
+def _release_rank(release: dict, album_hint: Optional[str] = None) -> tuple:
+    """Sort key for choosing the most canonical release: exact album-title
+    match beats everything, then Official status, then Album-typed release
+    groups, then the earliest release date (original pressing over reissue).
+    Higher tuple sorts first via max()."""
+    rank = 0
+    title = release.get("title")
+    if album_hint and isinstance(title, str) and title.casefold() == album_hint.casefold():
+        rank += 100
+    if release.get("status") == "Official":
+        rank += 10
+    group = release.get("release-group")
+    if isinstance(group, dict) and group.get("primary-type") == "Album":
+        rank += 5
+    media = release.get("media")
+    for medium in media if isinstance(media, list) else []:
+        # Prefer CD/digital pressings: vinyl tracks are numbered by side
+        # ("D3"), which breaks numeric track numbering downstream.
+        if isinstance(medium, dict) and medium.get("format") in ("CD", "Digital Media"):
+            rank += 2
+            break
+    date = release.get("date")
+    date = date if isinstance(date, str) and date else "9999"
+    # ISO dates compare correctly as strings; invert so earlier sorts higher.
+    return (rank, [-ord(c) for c in date])
+
+
 def cover_art_url(release_mbid: str, size: int = 500) -> str:
     """Cover Art Archive front-image URL for a release (500/250/1200 sizes)."""
     return f"{COVER_ART_ROOT}/release/{release_mbid}/front-{size}"
@@ -175,28 +220,14 @@ class MusicBrainzClient:
     def parse_recording_hit(recording: dict, album_hint: Optional[str] = None) -> ResolvedTrack:
         """
         Map one recording search hit to a ResolvedTrack, choosing the most
-        canonical release it appears on (official > album-typed > dated;
-        exact album_hint title match wins outright).
+        canonical release it appears on via _release_rank (exact album_hint
+        match > official > album-typed > earliest date).
         """
-        best_release: dict = {}
-        best_rank = -1
         releases = recording.get("releases")
-        for release in releases if isinstance(releases, list) else []:
-            if not isinstance(release, dict):
-                continue
-            rank = 0
-            title = release.get("title")
-            if album_hint and isinstance(title, str) and title.casefold() == album_hint.casefold():
-                rank += 100
-            if release.get("status") == "Official":
-                rank += 10
-            group = release.get("release-group")
-            if isinstance(group, dict) and group.get("primary-type") == "Album":
-                rank += 5
-            if release.get("date"):
-                rank += 1
-            if rank > best_rank:
-                best_rank, best_release = rank, release
+        candidates = [r for r in releases if isinstance(r, dict)] if isinstance(releases, list) else []
+        best_release: dict = (
+            max(candidates, key=lambda r: _release_rank(r, album_hint)) if candidates else {}
+        )
 
         medium = _first(best_release.get("media"))
         track_in_medium = _first(medium.get("track"))
@@ -206,11 +237,20 @@ class MusicBrainzClient:
             track_number = int(number)
         elif isinstance(number, int):
             track_number = number
+        else:
+            # Vinyl-style numbers ("D3") aren't numeric — search results carry
+            # the matched track's 0-based offset within the medium instead.
+            offset = medium.get("track-offset")
+            if isinstance(offset, int):
+                track_number = offset + 1
 
         length_ms = recording.get("length")
         release_id = best_release.get("id")
         return ResolvedTrack(
-            title=recording.get("title") or "",
+            # The release's track title is what appears on the album (a
+            # recording title can carry annotations like "… / [unknown]"
+            # for hidden-track merges).
+            title=track_in_medium.get("title") or recording.get("title") or "",
             artist_name=_artist_credit_name(recording),
             album_title=best_release.get("title"),
             track_number=track_number,
@@ -228,8 +268,7 @@ class MusicBrainzClient:
     def parse_release(release: dict) -> ResolvedAlbum:
         """Map a release (search hit or full lookup) to a ResolvedAlbum."""
         release_id = release.get("id")
-        genres = release.get("genres")
-        genre = _first(genres).get("name") if isinstance(genres, list) else None
+        genre = _top_genre(release)
 
         tracks: list[ResolvedTrack] = []
         media = release.get("media")

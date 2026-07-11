@@ -110,6 +110,47 @@ def test_parse_recording_hit_prefers_official_release():
     assert track.cover_art_url == cover_art_url("rel-mbid-1")
 
 
+def test_parse_recording_hit_prefers_earliest_official_release():
+    hit = {
+        "id": "rec-1",
+        "title": "T",
+        "releases": [
+            {"id": "reissue", "title": "Album", "status": "Official", "date": "2023-05-12",
+             "release-group": {"primary-type": "Album"}},
+            {"id": "original", "title": "Album", "status": "Official", "date": "2013-05-17",
+             "release-group": {"primary-type": "Album"}},
+        ],
+    }
+    track = MusicBrainzClient.parse_recording_hit(hit)
+    assert track.musicbrainz_release_id == "original"
+    assert track.release_year == 2013
+
+
+def test_parse_recording_hit_prefers_cd_over_vinyl_and_offsets_vinyl_numbers():
+    hit = {
+        "id": "rec-1",
+        "title": "T",
+        "releases": [
+            {"id": "vinyl", "title": "Album", "status": "Official", "date": "2013-10-28",
+             "release-group": {"primary-type": "Album"},
+             "media": [{"position": 2, "format": "12\" Vinyl", "track-offset": 5,
+                        "track": [{"number": "D3", "title": "T"}]}]},
+            {"id": "cd", "title": "Album", "status": "Official", "date": "2013-10-28",
+             "release-group": {"primary-type": "Album"},
+             "media": [{"position": 2, "format": "CD", "track": [{"number": "6"}]}]},
+        ],
+    }
+    track = MusicBrainzClient.parse_recording_hit(hit)
+    assert track.musicbrainz_release_id == "cd"
+    assert track.track_number == 6
+
+    # Vinyl-only recording: track number derived from the medium offset.
+    vinyl_only = {"id": "rec-2", "title": "T", "releases": [hit["releases"][0]]}
+    track = MusicBrainzClient.parse_recording_hit(vinyl_only)
+    assert track.track_number == 6            # track-offset 5 → 6th track
+    assert track.disc_number == 2
+
+
 def test_parse_recording_hit_album_hint_overrides():
     track = MusicBrainzClient.parse_recording_hit(RECORDING_HIT, album_hint="bootleg comp")
     assert track.musicbrainz_release_id == "rel-mbid-nonofficial"
@@ -143,7 +184,11 @@ def test_parse_release_full_lookup():
         "artist-credit": [
             {"name": "Daft Punk", "artist": {"id": "artist-mbid-1", "name": "Daft Punk"}}
         ],
-        "release-group": {"primary-type": "Album", "secondary-types": []},
+        "release-group": {
+            "primary-type": "Album",
+            "secondary-types": [],
+            "genres": [{"name": "disco", "count": 13}, {"name": "club", "count": 1}],
+        },
         "genres": [{"name": "electronic", "count": 10}],
         "media": [
             {
@@ -175,6 +220,21 @@ def test_parse_release_full_lookup():
     assert album.tracks[0].musicbrainz_id == "rec-mbid-1"
     assert album.tracks[0].track_number == 1
     assert album.tracks[1].duration_seconds == 322   # falls back to recording length
+
+
+def test_genre_falls_back_to_release_group_votes():
+    album = MusicBrainzClient.parse_release(
+        {
+            "id": "x",
+            "title": "T",
+            "genres": [],
+            "release-group": {
+                "primary-type": "Album",
+                "genres": [{"name": "club", "count": 1}, {"name": "disco", "count": 13}],
+            },
+        }
+    )
+    assert album.genre == "disco"    # highest vote count, not first in list
 
 
 def test_parse_release_compilation_type():

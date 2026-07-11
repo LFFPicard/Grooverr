@@ -117,6 +117,68 @@ async def test_track_confident_mb_hit_wins():
     assert yt.calls == []                     # fallback never touched
 
 
+async def test_track_prefers_recording_on_earliest_official_release():
+    remaster = {
+        "id": "rec-remaster", "score": 100, "title": "Real Song",
+        "releases": [{"id": "rel-2023", "title": "Real Album", "status": "Official",
+                      "date": "2023-05-12", "release-group": {"primary-type": "Album"}}],
+    }
+    original = {
+        "id": "rec-original", "score": 100, "title": "Real Song",
+        "releases": [{"id": "rel-2013", "title": "Real Album", "status": "Official",
+                      "date": "2013-05-17", "release-group": {"primary-type": "Album"}}],
+    }
+    resolver = make_resolver(FakeMB(recordings=[remaster, original]))
+    track = await resolver.resolve_track("Real Song")
+    assert track is not None
+    assert track.musicbrainz_id == "rec-original"
+    assert track.release_year == 2013
+
+
+async def test_track_underscored_original_beats_remaster_scoring_100():
+    # Real-world MB behaviour ("Give Life Back to Music"): the 2023-remaster
+    # recording scores 100 but only appears on the reissue; the original
+    # recording scores 84 (below threshold) yet sits on the 2013 pressing.
+    remaster = {
+        "id": "rec-remaster", "score": 100, "title": "Real Song",
+        "artist-credit": [{"name": "Real Artist", "artist": {"id": "a1", "name": "Real Artist"}}],
+        "releases": [{"id": "rel-2023", "title": "Real Album", "status": "Official",
+                      "date": "2023-05-12", "release-group": {"primary-type": "Album"}}],
+    }
+    promo = {
+        "id": "rec-promo", "score": 100, "title": "Real Song",
+        "artist-credit": [{"name": "Real Artist", "artist": {"id": "a1", "name": "Real Artist"}}],
+        "releases": [{"id": "rel-promo", "title": "Promo Comp", "status": "Promotion",
+                      "date": "2014", "release-group": {"primary-type": "Album"}}],
+    }
+    original = {
+        "id": "rec-original", "score": 84, "title": "Real Song",
+        "artist-credit": [{"name": "Real Artist", "artist": {"id": "a1", "name": "Real Artist"}}],
+        "releases": [{"id": "rel-2013", "title": "Real Album", "status": "Official",
+                      "date": "2013-05-17", "release-group": {"primary-type": "Album"}}],
+    }
+    resolver = make_resolver(FakeMB(recordings=[remaster, promo, original]))
+    track = await resolver.resolve_track("Real Song", artist="Real Artist")
+    assert track is not None
+    assert track.musicbrainz_id == "rec-original"
+    assert track.release_year == 2013
+
+
+async def test_track_inexact_low_score_hits_do_not_hijack():
+    # A different song scoring below threshold must NOT win via release
+    # ranking — non-exact titles only compete on relevance score.
+    wrong_song = {
+        "id": "rec-wrong", "score": 80, "title": "Different Song Entirely",
+        "releases": [{"id": "rel-old", "title": "Old Album", "status": "Official",
+                      "date": "1966-01-01", "release-group": {"primary-type": "Album"}}],
+    }
+    right_song = dict(MB_RECORDING_HIT)
+    resolver = make_resolver(FakeMB(recordings=[wrong_song, right_song]))
+    track = await resolver.resolve_track("Real Song")
+    assert track is not None
+    assert track.musicbrainz_id == "rec-1"
+
+
 async def test_track_low_score_falls_back_to_ytm():
     low = dict(MB_RECORDING_HIT, score=40)
     yt = FakeYT(songs=[yt_track()])
@@ -164,6 +226,26 @@ async def test_album_confident_mb_hit_does_full_lookup():
     assert album.source == MetadataSource.musicbrainz
     assert album.musicbrainz_id == "rel-1"
     assert len(album.tracks) == 1             # full lookup got the track list
+
+
+async def test_album_prefers_earliest_official_among_equal_scores():
+    hits = [
+        {"id": "reissue", "score": 100, "title": "Real Album", "status": "Official",
+         "date": "2023-05-12", "release-group": {"primary-type": "Album"}},
+        {"id": "original", "score": 100, "title": "Real Album", "status": "Official",
+         "date": "2013-05-17", "release-group": {"primary-type": "Album"}},
+    ]
+    lookups = {}
+
+    class MB(FakeMB):
+        async def get_release(self, mbid):
+            lookups["id"] = mbid
+            return {"id": mbid, "title": "Real Album"}
+
+    resolver = make_resolver(MB(releases=hits))
+    album = await resolver.resolve_album("Real Album")
+    assert album is not None
+    assert lookups["id"] == "original"
 
 
 async def test_album_fallback_pulls_full_ytm_album():
