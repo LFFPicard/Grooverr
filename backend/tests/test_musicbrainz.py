@@ -293,3 +293,21 @@ def test_parse_artist_hit():
 def test_lucene_escape():
     assert _lucene_escape('say "hello"') == 'say \\"hello\\"'
     assert _lucene_escape("back\\slash") == "back\\\\slash"
+
+
+async def test_search_freetext_strips_lucene_operators():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["query"] = dict(request.url.params).get("query")
+        return httpx.Response(200, json={"recordings": [RECORDING_HIT]})
+
+    client = make_client(handler)
+    hits = await client.search_freetext("recording", 'AC/DC: "T.N.T." (live?)')
+    await client.close()
+    assert len(hits) == 1
+    assert seen["query"] == "AC DC T.N.T. live"
+
+    empty_client = make_client(handler)
+    assert await empty_client.search_freetext("recording", ":::") == []
+    await empty_client.close()

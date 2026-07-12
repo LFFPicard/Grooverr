@@ -8,6 +8,7 @@ MusicBrainz API client (direct REST, JSON web service v2).
   never direct indexing (grooverr.md Section 10, Batch 2 — hard requirement).
 """
 import asyncio
+import re
 import time
 from typing import Any, Optional
 
@@ -28,6 +29,14 @@ DEFAULT_USER_AGENT = "Grooverr/0.1.0 ( https://github.com/LFFPicard/Grooverr )"
 def _lucene_escape(value: str) -> str:
     """Escape a value for embedding inside a quoted Lucene phrase."""
     return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+_LUCENE_SPECIALS = re.compile(r'[+\-&|!(){}\[\]^"~*?:\\/]')
+
+
+def _lucene_strip(value: str) -> str:
+    """Neutralise Lucene operators in raw user text (freetext search)."""
+    return " ".join(_LUCENE_SPECIALS.sub(" ", value).split())
 
 
 def _first(items: Any) -> dict:
@@ -236,6 +245,26 @@ class MusicBrainzClient:
         )
         artists = data.get("artists")
         return artists if isinstance(artists, list) else []
+
+    async def search_freetext(
+        self,
+        entity: str,
+        query: str,
+        limit: int = 5,
+        extra_terms: Optional[str] = None,
+    ) -> list[dict]:
+        """Unfielded search for one-box user queries ('title artist' mixed):
+        MB matches bare terms across the entity's indexed fields, which a
+        phrase-quoted recording:"…" query cannot do. entity is 'recording',
+        'release' or 'artist'; extra_terms appends Lucene field filters."""
+        text = _lucene_strip(query)
+        if not text:
+            return []
+        if extra_terms:
+            text = f"({text}) AND {extra_terms}"
+        data = await self._get(entity, {"query": text, "limit": limit})
+        results = data.get(f"{entity}s")
+        return results if isinstance(results, list) else []
 
     # ── Lookup ────────────────────────────────────────────────────────────
 

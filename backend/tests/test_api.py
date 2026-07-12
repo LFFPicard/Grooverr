@@ -212,14 +212,10 @@ def test_track_download_action(clean_db):
 
 class FakeSearchResolver:
     class _MB:
-        async def search_recordings(self, q, limit=5, only_official_studio=False, **kw):
-            from tests.test_musicbrainz import RECORDING_HIT
-            return [RECORDING_HIT]
-
-        async def search_releases(self, q, limit=5, **kw):
-            return []
-
-        async def search_artists(self, q, limit=5, **kw):
+        async def search_freetext(self, entity, q, limit=5, extra_terms=None):
+            if entity == "recording":
+                from tests.test_musicbrainz import RECORDING_HIT
+                return [RECORDING_HIT]
             return []
 
         from app.resolver.musicbrainz import MusicBrainzClient as _C
@@ -266,6 +262,33 @@ def test_url_search_detects_and_resolves(clean_db, fake_resolver):
     assert body["query_type"] == "url"
     assert body["url_type"] == "track"
     assert body["tracks"][0]["title"] == "URL Track"
+
+
+def test_search_rerank_puts_exact_match_above_mashups():
+    from app.api.search import _rerank
+
+    variants = lambda t: [(t.title, t.artist_name), (t.title, t.album_artist)]
+    exact = ResolvedTrack(title="Give Life Back to Music", artist_name="Daft Punk",
+                          source=MetadataSource.musicbrainz)
+    mashup = ResolvedTrack(
+        title="Give Life Back to Music (Somebody to Love remix) (Daft Punk vs. Liltommyj)",
+        artist_name="Daft Punk vs. Liltommyj", source=MetadataSource.musicbrainz,
+    )
+    ranked = _rerank("give life back to music daft punk", [mashup, exact], variants)
+    assert ranked[0] is exact
+
+    # A featured-guest track credit must not lose to a plainly-credited
+    # remaster; equal similarity breaks toward the earlier release.
+    original = ResolvedTrack(
+        title="Give Life Back to Music", artist_name="Daft Punk feat. Nile Rodgers",
+        album_artist="Daft Punk", release_year=2013, source=MetadataSource.musicbrainz,
+    )
+    remaster = ResolvedTrack(
+        title="Give Life Back to Music", artist_name="Daft Punk",
+        album_artist="Daft Punk", release_year=2023, source=MetadataSource.musicbrainz,
+    )
+    ranked = _rerank("give life back to music daft punk", [remaster, original], variants)
+    assert ranked[0] is original
 
 
 # ── Settings ───────────────────────────────────────────────────────────────

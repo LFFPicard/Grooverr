@@ -29,6 +29,41 @@ logger = logging.getLogger("grooverr.api.search")
 router = APIRouter(prefix="/api/search", tags=["search"])
 
 RESULTS_PER_CATEGORY = 5
+FETCH_PER_CATEGORY = 15                      # over-fetch, then re-rank
+
+
+def _tokens(*values: str | None) -> set[str]:
+    tokens: set[str] = set()
+    for value in values:
+        if value:
+            tokens.update(value.casefold().replace("’", "'").split())
+    return tokens
+
+
+def _rerank(query: str, candidates: list, variants_of) -> list:
+    """Order candidates by token-set similarity to the query. MB relevance
+    ranks mashups/bootlegs first on one-box queries because their titles
+    embed the artist name; Jaccard similarity over title+artist tokens puts
+    the exact real match on top instead.
+
+    variants_of returns alternative text tuples per candidate (e.g. track
+    credit vs album artist — "Daft Punk feat. Nile Rodgers" must not lose
+    to a remaster credited plainly to "Daft Punk"); the best variant
+    counts. Equal similarity breaks toward the earliest release year, same
+    original-over-reissue reasoning as the resolver."""
+    query_tokens = _tokens(query)
+
+    def key(candidate) -> tuple:
+        best = 0.0
+        for variant in variants_of(candidate):
+            cand_tokens = _tokens(*variant)
+            if cand_tokens and query_tokens:
+                overlap = len(query_tokens & cand_tokens)
+                best = max(best, overlap / len(query_tokens | cand_tokens))
+        year = getattr(candidate, "release_year", None)
+        return (best, (3000 - year) if year else 0)
+
+    return sorted(candidates, key=key, reverse=True)[:RESULTS_PER_CATEGORY]
 
 
 @router.get("", response_model=SearchResponse)
@@ -55,23 +90,34 @@ async def search(q: str = Query(min_length=1, max_length=500)):
     mb = runtime.resolver.mb
     yt = runtime.resolver.yt
 
-    # MusicBrainz first (Section 7.1 step 3) — studio-first for recordings,
-    # same reasoning as the resolver's two-pass search.
+    # MusicBrainz first (Section 7.1 step 3). Freetext (unfielded) queries —
+    # users type "title artist" into one box, which a phrase-quoted field
+    # query can never match. Studio-first pass for recordings, same
+    # reasoning as the resolver's two-pass search.
     try:
-        hits = await mb.search_recordings(q, limit=RESULTS_PER_CATEGORY, only_official_studio=True)
+        hits = await mb.search_freetext(
+            "recording", q, FETCH_PER_CATEGORY,
+            extra_terms="status:official AND primarytype:album AND NOT secondarytype:live",
+        )
         if not hits:
-            hits = await mb.search_recordings(q, limit=RESULTS_PER_CATEGORY)
-        response.tracks = [mb.parse_recording_hit(h) for h in hits if isinstance(h, dict)]
+            hits = await mb.search_freetext("recording", q, FETCH_PER_CATEGORY)
+        tracks = [mb.parse_recording_hit(h) for h in hits if isinstance(h, dict)]
+        response.tracks = _rerank(
+            q, tracks,
+            lambda t: [(t.title, t.artist_name), (t.title, t.album_artist)],
+        )
     except Exception:
         logger.exception("MusicBrainz recording search failed for %r", q)
     try:
-        release_hits = await mb.search_releases(q, limit=RESULTS_PER_CATEGORY)
-        response.albums = [mb.parse_release(h) for h in release_hits if isinstance(h, dict)]
+        release_hits = await mb.search_freetext("release", q, FETCH_PER_CATEGORY)
+        albums = [mb.parse_release(h) for h in release_hits if isinstance(h, dict)]
+        response.albums = _rerank(q, albums, lambda a: [(a.title, a.artist_name)])
     except Exception:
         logger.exception("MusicBrainz release search failed for %r", q)
     try:
-        artist_hits = await mb.search_artists(q, limit=RESULTS_PER_CATEGORY)
-        response.artists = [mb.parse_artist_hit(h) for h in artist_hits if isinstance(h, dict)]
+        artist_hits = await mb.search_freetext("artist", q, FETCH_PER_CATEGORY)
+        artists = [mb.parse_artist_hit(h) for h in artist_hits if isinstance(h, dict)]
+        response.artists = _rerank(q, artists, lambda a: [(a.name,)])
     except Exception:
         logger.exception("MusicBrainz artist search failed for %r", q)
 

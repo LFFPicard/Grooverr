@@ -77,8 +77,18 @@ def download_audio(
         "key": "FFmpegExtractAudio",
         "preferredcodec": _CODEC_BY_FORMAT[output_format],
     }
-    if quality_kbps and output_format in LOSSY_FORMATS:
-        postprocessor["preferredquality"] = str(quality_kbps)
+    if output_format in LOSSY_FORMATS:
+        if quality_kbps:
+            postprocessor["preferredquality"] = str(quality_kbps)
+        elif output_format in ("mp3", "ogg"):
+            # No ceiling = best: ffmpeg's lame/vorbis default is ~128k —
+            # request VBR quality 0 (~245k for mp3) instead.
+            postprocessor["preferredquality"] = "0"
+        elif output_format == "m4a":
+            # AAC has no meaningful -q:a mapping; pin a rate above the
+            # ~128-160k opus source. (opus target needs nothing: yt-dlp
+            # stream-copies when source and target codecs match.)
+            postprocessor["preferredquality"] = "192"
 
     options = {
         "format": fmt,
