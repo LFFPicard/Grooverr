@@ -6,6 +6,9 @@ __pycache__/
 *.db-wal
 *.db-shm
 
+# Local dev data (DB, downloaded music from CLI verification runs)
+backend/.devdata/
+
 # Node
 node_modules/
 dist/
