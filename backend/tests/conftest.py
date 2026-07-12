@@ -23,7 +23,8 @@ def clean_db():
     init_db()
     yield
     with Session(engine) as session:
-        for model in (models.QueueItem, models.Track, models.Album,
-                      models.Artist, models.Settings):
+        # Child tables (FK dependents) before their parents.
+        for model in (models.PlaylistTrack, models.QueueItem, models.Track,
+                      models.Playlist, models.Album, models.Artist, models.Settings):
             session.exec(delete(model))
         session.commit()

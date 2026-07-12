@@ -24,7 +24,7 @@ from app.api.schemas import (
 )
 from app.db import engine
 from app.downloader.ytdlp import SUPPORTED_FORMATS
-from app.models import Album, Artist, Track, TrackStatus
+from app.models import Album, Artist, Playlist, PlaylistTrack, Track, TrackStatus
 from app.resolver.schemas import ResolvedAlbum, ResolvedTrack
 from app import runtime
 
@@ -188,19 +188,26 @@ def list_artists(
 
 def _find_or_create_artist(session: Session, name: Optional[str],
                            mbid: Optional[str] = None) -> Artist:
+    # Resolve the effective name before searching, so two tracks with no
+    # artist metadata at all dedupe onto the same "Unknown Artist" row
+    # instead of each minting a fresh one.
+    effective_name = name or "Unknown Artist"
     artist = None
     if mbid:
         artist = session.exec(select(Artist).where(Artist.musicbrainz_id == mbid)).first()
-    if artist is None and name:
-        artist = session.exec(select(Artist).where(Artist.name == name)).first()
     if artist is None:
-        artist = Artist(name=name or "Unknown Artist", musicbrainz_id=mbid)
+        artist = session.exec(select(Artist).where(Artist.name == effective_name)).first()
+    if artist is None:
+        artist = Artist(name=effective_name, musicbrainz_id=mbid)
         session.add(artist)
         session.flush()
     return artist
 
 
 def _find_or_create_album(session: Session, artist: Artist, resolved: ResolvedAlbum) -> Album:
+    # Same reasoning as _find_or_create_artist: search on the effective
+    # title so albums with no metadata dedupe onto one "Unknown Album" row.
+    effective_title = resolved.title or "Unknown Album"
     album = None
     if resolved.musicbrainz_id:
         album = session.exec(
@@ -208,12 +215,12 @@ def _find_or_create_album(session: Session, artist: Artist, resolved: ResolvedAl
         ).first()
     if album is None:
         album = session.exec(
-            select(Album).where(Album.artist_id == artist.id, Album.title == resolved.title)
+            select(Album).where(Album.artist_id == artist.id, Album.title == effective_title)
         ).first()
     if album is None:
         album = Album(
             artist_id=artist.id,
-            title=resolved.title or "Unknown Album",
+            title=effective_title,
             musicbrainz_id=resolved.musicbrainz_id,
             release_year=resolved.release_year,
             album_type=resolved.album_type or "album",
@@ -362,20 +369,88 @@ async def add_to_library(body: AddToLibraryRequest):
             response.added_artist_id = artist.id
         return response
 
-    # playlist: no Playlist entity in the v1 data model (Section 11) — each
-    # playlist track is added individually and goes through metadata_resolve
-    # for canonical MusicBrainz data.
+    # playlist: create/reuse a Playlist row and link each track into it via
+    # PlaylistTrack (Section 5) — this is what "Complete this playlist"
+    # (Section 7.4) groups against. Each track goes through the same
+    # album/artist dedup as a standalone add, since playlist tracks usually
+    # span many different artists/albums.
     if body.playlist is None:
         raise HTTPException(422, "type=playlist requires a 'playlist' object")
-    for resolved_track in body.playlist.tracks:
-        track_id, _ = runtime.queue_service.add_track_request(
-            title=resolved_track.title,
-            artist=resolved_track.artist_name,
-            album=resolved_track.album_title,
-            quality_kbps=body.quality_kbps,
-            output_format=body.output_format,
-        )
-        response.added_track_ids.append(track_id)
+    resolved_playlist = body.playlist
+
+    with Session(engine) as session:
+        playlist = None
+        if resolved_playlist.youtube_playlist_id:
+            playlist = session.exec(
+                select(Playlist).where(
+                    Playlist.source_playlist_id == resolved_playlist.youtube_playlist_id
+                )
+            ).first()
+        if playlist is None:
+            playlist = Playlist(
+                name=resolved_playlist.title or "Untitled Playlist",
+                source="youtube-music",
+                source_playlist_id=resolved_playlist.youtube_playlist_id,
+            )
+            session.add(playlist)
+            session.flush()
+
+        new_tracks = []
+        for position, resolved_track in enumerate(resolved_playlist.tracks, start=1):
+            artist = _find_or_create_artist(
+                session, resolved_track.album_artist or resolved_track.artist_name,
+                resolved_track.musicbrainz_artist_id,
+            )
+            album = _find_or_create_album(
+                session, artist,
+                ResolvedAlbum(
+                    title=resolved_track.album_title or "Unknown Album",
+                    musicbrainz_id=resolved_track.musicbrainz_release_id,
+                    release_year=resolved_track.release_year,
+                    cover_art_url=resolved_track.cover_art_url,
+                    genre=resolved_track.genre,
+                    source=resolved_track.source,
+                ),
+            )
+            track = _create_track(session, album, resolved_track)
+            if track is None:
+                response.already_in_library += 1
+                track = session.exec(
+                    select(Track).where(
+                        Track.album_id == album.id, Track.title == resolved_track.title
+                    )
+                ).first()
+            else:
+                new_tracks.append((track.id, resolved_track))
+
+            if track is not None:
+                already_linked = session.exec(
+                    select(PlaylistTrack).where(
+                        PlaylistTrack.playlist_id == playlist.id,
+                        PlaylistTrack.track_id == track.id,
+                    )
+                ).first()
+                if already_linked is None:
+                    session.add(
+                        PlaylistTrack(playlist_id=playlist.id, track_id=track.id, position=position)
+                    )
+
+        session.commit()
+        response.added_playlist_id = playlist.id
+        response.added_track_ids = [track_id for track_id, _ in new_tracks]
+
+    for track_id, resolved_track in new_tracks:
+        # Same rule as a standalone track add: skip straight to download
+        # when the source already gave us an id to work with, else resolve
+        # first for canonical MusicBrainz metadata.
+        if resolved_track.musicbrainz_id or resolved_track.youtube_video_id:
+            runtime.queue_service.enqueue_download(
+                track_id, quality=quality, output_format=body.output_format
+            )
+        else:
+            runtime.queue_service.enqueue_resolve(
+                track_id, quality=quality, output_format=body.output_format
+            )
     response.queued_jobs = len(response.added_track_ids)
     return response
 

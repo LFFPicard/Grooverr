@@ -48,6 +48,7 @@ def init_db():
     with engine.begin() as connection:
         _ensure_column(connection, "album", "genre", "genre VARCHAR")
         _ensure_column(connection, "queueitem", "requested_format", "requested_format VARCHAR")
+        _ensure_column(connection, "track", "has_artwork", "has_artwork BOOLEAN")
 
 
 def get_session():

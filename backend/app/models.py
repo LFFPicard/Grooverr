@@ -95,6 +95,11 @@ class Track(SQLModel, table=True):
     audio_source: Optional[AudioSource] = None
     audio_source_url: Optional[str] = None
     error_message: Optional[str] = None
+    # Extension over the Section 5 field list (flagged in Section 11): whether
+    # cover art actually got embedded at download time (Section 6 — art is
+    # attempted but non-blocking, so this can be False on a downloaded track).
+    # Null until downloaded.
+    has_artwork: Optional[bool] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     downloaded_at: Optional[datetime] = None
 
@@ -119,3 +124,23 @@ class QueueItem(SQLModel, table=True):
 class Settings(SQLModel, table=True):
     key: str = Field(primary_key=True)
     value: str  # JSON-encoded
+
+
+class Playlist(SQLModel, table=True):
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    name: str
+    source: str = Field(default="youtube-music")
+    source_url: Optional[str] = None
+    source_playlist_id: Optional[str] = Field(default=None, index=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class PlaylistTrack(SQLModel, table=True):
+    __table_args__ = (
+        Index("ix_playlisttrack_playlist_track", "playlist_id", "track_id", unique=True),
+    )
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    playlist_id: str = Field(foreign_key="playlist.id", index=True)
+    track_id: str = Field(foreign_key="track.id", index=True)
+    position: int = Field(default=0)

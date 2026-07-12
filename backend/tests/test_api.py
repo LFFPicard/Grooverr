@@ -5,12 +5,13 @@ External services are faked by patching app.runtime's shared instances.
 """
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import func
 from sqlmodel import Session, select
 
 from app import runtime
 from app.db import engine
 from app.main import app
-from app.models import Album, JobType, QueueItem, Track, TrackStatus
+from app.models import Album, JobType, Playlist, QueueItem, Track, TrackStatus
 from app.resolver.schemas import (
     MetadataSource,
     ResolvedAlbum,
@@ -118,6 +119,98 @@ def test_add_playlist_adds_each_track(clean_db):
     )
     assert response.status_code == 202
     assert response.json()["queued_jobs"] == 2
+
+
+def test_add_playlist_creates_playlist_row_and_links_tracks(clean_db):
+    playlist = ResolvedPlaylist(
+        title="Road Trip",
+        source=MetadataSource.youtube_music,
+        youtube_playlist_id="PLxyz",
+        tracks=[
+            ResolvedTrack(title="P1", artist_name="Artist A", album_title="Album A",
+                          youtube_video_id="v1", source=MetadataSource.youtube_music),
+            ResolvedTrack(title="P2", artist_name="Artist B", album_title="Album B",
+                          youtube_video_id="v2", source=MetadataSource.youtube_music),
+        ],
+    )
+    response = client.post(
+        "/api/library/add",
+        json={"type": "playlist", "playlist": playlist.model_dump(mode="json")},
+    )
+    assert response.status_code == 202
+    body = response.json()
+    assert body["added_playlist_id"]
+    assert len(body["added_track_ids"]) == 2
+    assert body["queued_jobs"] == 2
+
+    with Session(engine) as session:
+        jobs = session.exec(select(QueueItem)).all()
+        assert all(j.job_type == JobType.download for j in jobs)  # both carried a video id
+
+    detail = client.get(f"/api/library/playlists/{body['added_playlist_id']}").json()
+    assert detail["name"] == "Road Trip"
+    assert detail["total_tracks"] == 2
+    assert [pt["position"] for pt in detail["tracks"]] == [1, 2]
+    assert detail["tracks"][0]["track"]["title"] == "P1"
+
+
+def test_add_playlist_same_source_id_reuses_playlist_and_dedupes_tracks(clean_db):
+    playlist = ResolvedPlaylist(
+        title="Road Trip", source=MetadataSource.youtube_music, youtube_playlist_id="PLxyz",
+        tracks=[ResolvedTrack(title="P1", youtube_video_id="v1", source=MetadataSource.youtube_music)],
+    )
+    first = client.post(
+        "/api/library/add", json={"type": "playlist", "playlist": playlist.model_dump(mode="json")}
+    ).json()
+    second = client.post(
+        "/api/library/add", json={"type": "playlist", "playlist": playlist.model_dump(mode="json")}
+    ).json()
+    assert second["added_playlist_id"] == first["added_playlist_id"]
+    assert second["added_track_ids"] == []
+    assert second["already_in_library"] == 1
+
+    with Session(engine) as session:
+        assert session.exec(select(func.count()).select_from(Playlist)).one() == 1
+
+
+def test_playlist_list_and_complete(clean_db):
+    playlist = ResolvedPlaylist(
+        title="Mix", source=MetadataSource.youtube_music, youtube_playlist_id="PLabc",
+        tracks=[
+            ResolvedTrack(title="T1", youtube_video_id="v1", source=MetadataSource.youtube_music),
+            ResolvedTrack(title="T2", youtube_video_id="v2", source=MetadataSource.youtube_music),
+        ],
+    )
+    added = client.post(
+        "/api/library/add", json={"type": "playlist", "playlist": playlist.model_dump(mode="json")}
+    ).json()
+    playlist_id = added["added_playlist_id"]
+
+    listing = client.get("/api/library/playlists").json()
+    assert listing["total"] == 1
+    assert listing["items"][0]["completeness"] == "empty"
+
+    with Session(engine) as session:
+        tracks = session.exec(select(Track)).all()
+        tracks[0].status = TrackStatus.downloaded
+        tracks[1].status = TrackStatus.error
+        tracks[1].error_message = "boom"
+        for t in tracks:
+            session.add(t)
+        for job in session.exec(select(QueueItem)):
+            session.delete(job)
+        session.commit()
+
+    complete = client.post(f"/api/library/playlists/{playlist_id}/complete")
+    assert complete.status_code == 200
+    assert complete.json()["queued_jobs"] == 1          # only the errored track, not the downloaded one
+
+    detail = client.get(f"/api/library/playlists/{playlist_id}").json()
+    assert detail["downloaded_tracks"] == 1
+    assert detail["completeness"] == "incomplete"
+
+    assert client.get("/api/library/playlists/nonexistent").status_code == 404
+    assert client.post("/api/library/playlists/nonexistent/complete").status_code == 404
 
 
 def test_add_rejects_bad_format_and_missing_payload(clean_db):

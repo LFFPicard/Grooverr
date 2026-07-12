@@ -206,6 +206,7 @@ class Pipeline:
                 track.bitrate = str(result.bitrate_kbps) if result.bitrate_kbps else None
                 track.audio_source = AudioSource(result.audio_source)
                 track.audio_source_url = result.audio_source_url
+                track.has_artwork = result.cover_embedded
                 track.downloaded_at = datetime.utcnow()
                 track.error_message = None
                 session.add(track)

@@ -231,6 +231,7 @@ async def test_enqueue_to_downloaded_end_to_end(clean_db):
     assert track.bitrate == "192"
     assert track.musicbrainz_id == "rec-1"
     assert track.audio_source.value == "youtube-music"
+    assert track.has_artwork is True
     assert track.downloaded_at is not None
     with Session(engine) as session:
         album = session.get(Album, track.album_id)

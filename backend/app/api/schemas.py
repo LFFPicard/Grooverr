@@ -42,6 +42,7 @@ class TrackOut(BaseModel):
     audio_source: Optional[str] = None
     audio_source_url: Optional[str] = None
     error_message: Optional[str] = None
+    has_artwork: Optional[bool] = None
     downloaded_at: Optional[datetime] = None
 
 
@@ -101,6 +102,7 @@ class AddToLibraryResponse(BaseModel):
     added_track_ids: list[str] = []
     added_album_id: Optional[str] = None
     added_artist_id: Optional[str] = None
+    added_playlist_id: Optional[str] = None
     queued_jobs: int = 0
     already_in_library: int = 0
 
@@ -112,6 +114,32 @@ class QueueTrackActionResponse(BaseModel):
 
 class CompleteAlbumResponse(BaseModel):
     album_id: str
+    queued_jobs: int
+
+
+# ── Playlists (Section 5 Playlist/PlaylistTrack, Section 7.4) ──────────────
+
+class PlaylistSummary(BaseModel):
+    id: str
+    name: str
+    source: str
+    total_tracks: int = 0
+    downloaded_tracks: int = 0
+    completeness: str
+    created_at: datetime
+
+
+class PlaylistTrackOut(BaseModel):
+    position: int
+    track: TrackOut
+
+
+class PlaylistDetail(PlaylistSummary):
+    tracks: list[PlaylistTrackOut] = []
+
+
+class CompletePlaylistResponse(BaseModel):
+    playlist_id: str
     queued_jobs: int
 
 
