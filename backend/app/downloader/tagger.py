@@ -114,7 +114,7 @@ def embed_tags(
     cover: Optional[bytes] = None,
 ) -> None:
     """Write all Section 6 tags (+ cover art) to the file in place."""
-    album_artist = album_artist or track.artist_name or "Unknown Artist"
+    album_artist = album_artist or track.album_artist or track.artist_name or "Unknown Artist"
 
     if output_format in ("mp3", "wav"):
         if output_format == "mp3":

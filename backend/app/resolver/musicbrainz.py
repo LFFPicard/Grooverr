@@ -59,6 +59,17 @@ def _artist_credit_name(entity: dict) -> Optional[str]:
     return "".join(parts).strip() or None
 
 
+def _primary_credit_name(entity: dict) -> Optional[str]:
+    """First credited artist's name alone ('Daft Punk'), without join
+    phrases — the album-artist fallback when the release carries no credit."""
+    credit = _first(entity.get("artist-credit"))
+    name = credit.get("name")
+    if not name:
+        artist = credit.get("artist")
+        name = artist.get("name") if isinstance(artist, dict) else None
+    return str(name) if name else None
+
+
 def _artist_credit_mbid(entity: dict) -> Optional[str]:
     credit = _first(entity.get("artist-credit"))
     artist = credit.get("artist")
@@ -114,9 +125,20 @@ def _release_rank(release: dict, album_hint: Optional[str] = None) -> tuple:
         rank += 100
     if release.get("status") == "Official":
         rank += 10
+    elif release.get("status") == "Bootleg":
+        rank -= 10
     group = release.get("release-group")
-    if isinstance(group, dict) and group.get("primary-type") == "Album":
-        rank += 5
+    if isinstance(group, dict):
+        if group.get("primary-type") == "Album":
+            rank += 5
+        secondary = group.get("secondary-types")
+        if isinstance(secondary, list):
+            # Studio recordings over live tapings and grab-bag compilations
+            # (an exact album_hint match still overrides — +100 dwarfs this).
+            if any(isinstance(t, str) and t.lower() == "live" for t in secondary):
+                rank -= 8
+            if any(isinstance(t, str) and t.lower() == "compilation" for t in secondary):
+                rank -= 3
     media = release.get("media")
     for medium in media if isinstance(media, list) else []:
         # Prefer CD/digital pressings: vinyl tracks are numbered by side
@@ -175,13 +197,23 @@ class MusicBrainzClient:
         artist: Optional[str] = None,
         album: Optional[str] = None,
         limit: int = 10,
+        only_official_studio: bool = False,
     ) -> list[dict]:
-        """Raw recording search hits (each includes a 0-100 'score')."""
+        """Raw recording search hits (each includes a 0-100 'score').
+
+        only_official_studio constrains hits to recordings appearing on
+        official, non-live album releases — for popular songs MB's relevance
+        ordering is otherwise saturated with bootleg live tapings (observed:
+        every top-25 hit for 'T.N.T.' + 'AC/DC' was a live bootleg)."""
         terms = [f'recording:"{_lucene_escape(title)}"']
         if artist:
             terms.append(f'artist:"{_lucene_escape(artist)}"')
         if album:
             terms.append(f'release:"{_lucene_escape(album)}"')
+        if only_official_studio:
+            terms.append("status:official")
+            terms.append("primarytype:album")
+            terms.append("NOT secondarytype:live")
         data = await self._get(
             "recording", {"query": " AND ".join(terms), "limit": limit}
         )
@@ -252,6 +284,10 @@ class MusicBrainzClient:
             # for hidden-track merges).
             title=track_in_medium.get("title") or recording.get("title") or "",
             artist_name=_artist_credit_name(recording),
+            # Album artist is the release's credit ("Daft Punk"), never the
+            # track credit ("Daft Punk feat. Nile Rodgers") — otherwise every
+            # guest-feature track lands in its own library folder.
+            album_artist=_artist_credit_name(best_release) or _primary_credit_name(recording),
             album_title=best_release.get("title"),
             track_number=track_number,
             disc_number=medium.get("position") if isinstance(medium.get("position"), int) else None,
@@ -290,6 +326,7 @@ class MusicBrainzClient:
                     ResolvedTrack(
                         title=track.get("title") or recording.get("title") or "",
                         artist_name=_artist_credit_name(track) or _artist_credit_name(release),
+                        album_artist=_artist_credit_name(release),
                         album_title=release.get("title"),
                         track_number=track.get("position") if isinstance(track.get("position"), int) else None,
                         disc_number=medium.get("position") if isinstance(medium.get("position"), int) else None,

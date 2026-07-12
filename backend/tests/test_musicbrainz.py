@@ -156,6 +156,31 @@ def test_parse_recording_hit_album_hint_overrides():
     assert track.musicbrainz_release_id == "rel-mbid-nonofficial"
 
 
+def test_album_artist_is_release_credit_not_track_credit():
+    hit = {
+        "id": "rec-1",
+        "title": "Give Life Back to Music",
+        "artist-credit": [
+            {"name": "Daft Punk", "joinphrase": " feat. ",
+             "artist": {"id": "artist-mbid-1", "name": "Daft Punk"}},
+            {"name": "Nile Rodgers", "artist": {"id": "artist-mbid-2", "name": "Nile Rodgers"}},
+        ],
+        "releases": [
+            {"id": "rel-1", "title": "Random Access Memories", "status": "Official",
+             "date": "2013-05-17", "release-group": {"primary-type": "Album"},
+             "artist-credit": [{"name": "Daft Punk", "artist": {"id": "artist-mbid-1"}}]},
+        ],
+    }
+    track = MusicBrainzClient.parse_recording_hit(hit)
+    assert track.artist_name == "Daft Punk feat. Nile Rodgers"
+    assert track.album_artist == "Daft Punk"
+
+    # Release without its own credit → primary (first) recording credit.
+    hit["releases"][0].pop("artist-credit")
+    track = MusicBrainzClient.parse_recording_hit(hit)
+    assert track.album_artist == "Daft Punk"
+
+
 def test_parse_recording_hit_survives_empty_payload():
     track = MusicBrainzClient.parse_recording_hit({})
     assert track.title == ""

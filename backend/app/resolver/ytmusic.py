@@ -103,6 +103,9 @@ def _parse_track(
     return ResolvedTrack(
         title=str(item.get("title") or ""),
         artist_name=_first_artist_name(item) or artist_name,
+        # For album tracks the caller passes the album-level artist; loose
+        # search/playlist results have no distinct album artist.
+        album_artist=artist_name,
         album_title=_album_title(item) or album_title,
         track_number=number,
         duration_seconds=duration,

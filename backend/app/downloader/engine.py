@@ -121,10 +121,11 @@ class DownloadEngine:
         if multi_disc is None:
             multi_disc = bool(track.disc_number and track.disc_number > 1)
 
+        album_artist = album_artist or track.album_artist or track.artist_name
         final_path = render_track_path(
             music_root=self.music_root,
             title=track.title,
-            album_artist=album_artist or track.artist_name or "Unknown Artist",
+            album_artist=album_artist or "Unknown Artist",
             album=track.album_title or "Unknown Album",
             ext=output_format,
             track_number=track.track_number,

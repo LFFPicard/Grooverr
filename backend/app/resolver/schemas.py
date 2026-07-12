@@ -27,6 +27,7 @@ class ResolvedArtist(BaseModel):
 class ResolvedTrack(BaseModel):
     title: str
     artist_name: Optional[str] = None
+    album_artist: Optional[str] = None       # release credit, not track credit
     album_title: Optional[str] = None
     track_number: Optional[int] = None
     disc_number: Optional[int] = None

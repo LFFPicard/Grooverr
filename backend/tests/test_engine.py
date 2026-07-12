@@ -32,7 +32,8 @@ class FakeMB:
         self.release_lookup = release_lookup or {}
         self.raise_on_search = raise_on_search
 
-    async def search_recordings(self, title, artist=None, album=None, limit=10):
+    async def search_recordings(self, title, artist=None, album=None, limit=10,
+                                only_official_studio=False):
         if self.raise_on_search:
             raise ConnectionError("MB is down")
         return self.recordings
@@ -162,6 +163,33 @@ async def test_track_underscored_original_beats_remaster_scoring_100():
     assert track is not None
     assert track.musicbrainz_id == "rec-original"
     assert track.release_year == 2013
+
+
+async def test_track_three_way_exact_match_admitted_at_low_score():
+    # With a release: filter in the query MB can score the original recording
+    # as low as 70 — but title+artist+album all matching exactly outweighs
+    # the Lucene relevance score.
+    remaster = {
+        "id": "rec-remaster", "score": 100, "title": "Real Song",
+        "artist-credit": [{"name": "Real Artist", "artist": {"id": "a1", "name": "Real Artist"}}],
+        "releases": [{"id": "rel-2023", "title": "Real Album", "status": "Official",
+                      "date": "2023-05-12", "release-group": {"primary-type": "Album"}}],
+    }
+    original = {
+        "id": "rec-original", "score": 70, "title": "Real Song",
+        "artist-credit": [{"name": "Real Artist", "artist": {"id": "a1", "name": "Real Artist"}}],
+        "releases": [{"id": "rel-2013", "title": "Real Album", "status": "Official",
+                      "date": "2013-05-17", "release-group": {"primary-type": "Album"}}],
+    }
+    resolver = make_resolver(FakeMB(recordings=[remaster, original]))
+    track = await resolver.resolve_track("Real Song", artist="Real Artist", album="Real Album")
+    assert track is not None
+    assert track.musicbrainz_id == "rec-original"
+
+    # Without the album hint, 70 stays below the admission floor.
+    track = await resolver.resolve_track("Real Song", artist="Real Artist")
+    assert track is not None
+    assert track.musicbrainz_id == "rec-remaster"
 
 
 async def test_track_inexact_low_score_hits_do_not_hijack():

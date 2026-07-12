@@ -60,6 +60,14 @@ def _is_exact_hit(hit: dict, title: str, artist: Optional[str]) -> bool:
     return True
 
 
+def _has_exact_release(hit: dict, album: str) -> bool:
+    releases = hit.get("releases")
+    for release in releases if isinstance(releases, list) else []:
+        if isinstance(release, dict) and _norm(release.get("title")) == _norm(album):
+            return True
+    return False
+
+
 def _best_release_rank(hit: dict, album_hint: Optional[str]) -> tuple:
     releases = hit.get("releases")
     candidates = [r for r in releases if isinstance(r, dict)] if isinstance(releases, list) else []
@@ -88,21 +96,38 @@ class MetadataResolver:
         artist: Optional[str] = None,
         album: Optional[str] = None,
     ) -> Optional[ResolvedTrack]:
+        # Two-pass search: official studio-album recordings first (bootleg
+        # live tapings otherwise crowd out the canonical recording entirely),
+        # falling back to an unconstrained search for tracks that only exist
+        # on singles, EPs or live releases.
+        hits: list = []
         try:
-            hits = await self.mb.search_recordings(title, artist=artist, album=album)
+            hits = await self.mb.search_recordings(
+                title, artist=artist, album=album, limit=25, only_official_studio=True
+            )
+            if not hits:
+                hits = await self.mb.search_recordings(title, artist=artist, album=album, limit=25)
         except Exception:
             logger.exception("MusicBrainz recording search failed for %r", title)
-            hits = []
         # MusicBrainz Lucene relevance is not canonicality: a 2023 remaster
         # recording can score 100 while the original pressing's recording
-        # scores 84. So: exact title+artist matches are admitted down to
-        # (min_score - 10) and ranked by the most canonical release they
-        # appear on (official > album > earliest date); only when no exact
-        # match exists do we fall back to trusting the relevance score.
+        # scores 84 (or 70 when a release: filter is in the query). So:
+        # exact title+artist matches are admitted down to (min_score - 10) —
+        # or (min_score - 25) when the requested album title also matches
+        # one of the hit's releases exactly, since a three-way exact match
+        # outweighs the relevance score — and ranked by the most canonical
+        # release they appear on (official > album > earliest date). Only
+        # when no exact match exists is the relevance score trusted.
         hits = [h for h in hits if isinstance(h, dict)]
+
+        def _admission_floor(hit: dict) -> int:
+            if album and _has_exact_release(hit, album):
+                return self.min_score - 25
+            return self.min_score - 10
+
         exact = [
             h for h in hits
-            if _score(h) >= self.min_score - 10 and _is_exact_hit(h, title, artist)
+            if _score(h) >= _admission_floor(h) and _is_exact_hit(h, title, artist)
         ]
         if exact:
             best = max(exact, key=lambda h: (_best_release_rank(h, album), _score(h)))
