@@ -46,3 +46,21 @@ body {
   font-family: 'Inter', sans-serif;
   transition: background-color 0.15s ease, color 0.15s ease;
 }
+
+@layer components {
+  .btn {
+    @apply font-body font-semibold text-[0.82rem] px-[18px] py-[9px] rounded-full border border-transparent cursor-pointer transition-opacity;
+  }
+  .btn:disabled {
+    @apply cursor-default;
+  }
+  .btn-plum {
+    @apply bg-plum text-white;
+  }
+  .btn-plum:hover:not(:disabled) {
+    @apply opacity-90;
+  }
+  .btn-ghost {
+    @apply bg-panel-sunken border-border text-text;
+  }
+}
