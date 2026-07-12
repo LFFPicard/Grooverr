@@ -20,7 +20,7 @@ from sqlmodel import Session, select
 from app.api.schemas import Page, QueueItemOut
 from app.db import engine
 from app.downloader.ytdlp import SUPPORTED_FORMATS
-from app.models import JobStatus, JobType, QueueItem, Track
+from app.models import Album, Artist, JobStatus, JobType, QueueItem, Track
 from app.queue.hub import hub
 
 router = APIRouter(prefix="/api/queue", tags=["queue"])
@@ -67,7 +67,12 @@ def list_jobs(
 ):
     limit = max(1, min(limit, 500))
     with Session(engine) as session:
-        query = select(QueueItem, Track).join(Track, isouter=True)
+        query = (
+            select(QueueItem, Track, Album, Artist)
+            .join(Track, Track.id == QueueItem.track_id, isouter=True)
+            .join(Album, Album.id == Track.album_id, isouter=True)
+            .join(Artist, Artist.id == Album.artist_id, isouter=True)
+        )
         if status is not None:
             query = query.where(QueueItem.status == status)
         if job_type is not None:
@@ -85,8 +90,10 @@ def list_jobs(
                 **job.model_dump(),
                 track_title=track.title if track else None,
                 track_status=track.status.value if track else None,
+                artist_name=artist.name if artist else None,
+                album_title=album.title if album else None,
             )
-            for job, track in rows
+            for job, track, album, artist in rows
         ]
     return Page(items=items, total=total, limit=limit, offset=offset)
 

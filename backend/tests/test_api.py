@@ -318,6 +318,44 @@ def test_settings_roundtrip_and_validation(clean_db):
     assert client.put("/api/settings", json={}).status_code == 422
 
 
+# ── Queue enrichment ────────────────────────────────────────────────────────
+
+def test_queue_listing_includes_artist_album_context(clean_db):
+    add_album(track_count=1)
+    body = client.get("/api/queue").json()
+    assert body["items"][0]["artist_name"] == "Seeded Artist"
+    assert body["items"][0]["album_title"] == "Seeded Album rel-1"
+
+
+# ── Activity feed ────────────────────────────────────────────────────────
+
+def test_activity_feed_empty_by_default(clean_db):
+    add_album(track_count=1)                          # only queues a job, doesn't finish it
+    assert client.get("/api/activity").json()["items"] == []
+
+
+def test_activity_feed_shows_finished_jobs_newest_first(clean_db):
+    body = add_album(track_count=2)
+    with Session(engine) as session:
+        jobs = session.exec(select(QueueItem)).all()
+        jobs[0].status = "done"
+        from datetime import datetime, timedelta
+        jobs[0].finished_at = datetime.utcnow() - timedelta(minutes=5)
+        jobs[1].status = "error"
+        jobs[1].error_message = "No YouTube Music match found for this track"
+        jobs[1].finished_at = datetime.utcnow()
+        session.add(jobs[0])
+        session.add(jobs[1])
+        session.commit()
+
+    items = client.get("/api/activity?limit=10").json()["items"]
+    assert len(items) == 2
+    assert items[0]["status"] == "error"               # most recent first
+    assert items[0]["error_message"] == "No YouTube Music match found for this track"
+    assert items[0]["artist_name"] == "Seeded Artist"
+    assert items[1]["status"] == "done"
+
+
 # ── Stats ──────────────────────────────────────────────────────────────────
 
 def test_stats_aggregates(clean_db):

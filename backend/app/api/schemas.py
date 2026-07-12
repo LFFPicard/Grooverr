@@ -132,6 +132,27 @@ class QueueItemOut(BaseModel):
     error_message: Optional[str] = None
     track_title: Optional[str] = None
     track_status: Optional[str] = None
+    artist_name: Optional[str] = None
+    album_title: Optional[str] = None
+
+
+# ── Activity feed ────────────────────────────────────────────────────────
+
+class ActivityItemOut(BaseModel):
+    """One finished/errored queue job, newest first (Dashboard 'Recent
+    Activity' panel). Not a paginated list — always just the latest N."""
+    id: str
+    job_type: str
+    status: str
+    track_title: Optional[str] = None
+    artist_name: Optional[str] = None
+    album_title: Optional[str] = None
+    error_message: Optional[str] = None
+    occurred_at: datetime
+
+
+class ActivityFeedOut(BaseModel):
+    items: list[ActivityItemOut]
 
 
 # ── Stats / settings ───────────────────────────────────────────────────────

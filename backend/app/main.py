@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 from app import runtime
+from app.api.activity import router as activity_router
 from app.api.library import router as library_router
 from app.api.search import router as search_router
 from app.api.settings import router as settings_router
@@ -49,6 +50,7 @@ app.include_router(search_router)
 app.include_router(library_router)
 app.include_router(settings_router)
 app.include_router(stats_router)
+app.include_router(activity_router)
 
 
 @app.get("/api/health")
