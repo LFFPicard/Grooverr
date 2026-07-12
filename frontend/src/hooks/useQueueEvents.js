@@ -42,6 +42,7 @@ export function useQueueEvents() {
         queryClient.invalidateQueries({ queryKey: ['stats'] })
         queryClient.invalidateQueries({ queryKey: ['activity'] })
         queryClient.invalidateQueries({ queryKey: ['albums'] })
+        queryClient.invalidateQueries({ queryKey: ['playlists'] })
       }
     }
 

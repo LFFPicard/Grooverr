@@ -1,3 +1,5 @@
+import { Link } from 'react-router-dom'
+
 export function AlbumCard({ album }) {
   const expected = album.total_tracks || album.known_tracks || 0
   const isComplete = album.completeness === 'complete'
@@ -5,7 +7,10 @@ export function AlbumCard({ album }) {
   const missing = expected - album.downloaded_tracks
 
   return (
-    <div className="bg-panel border border-border rounded-card overflow-hidden shadow-card dark:shadow-card-dark">
+    <Link
+      to={`/library/album/${album.id}`}
+      className="block bg-panel border border-border rounded-card overflow-hidden shadow-card dark:shadow-card-dark transition-transform hover:-translate-y-0.5"
+    >
       <div className="aspect-square bg-gradient-to-br from-plum-tint to-mustard-tint relative">
         {album.cover_art_url && (
           <img src={album.cover_art_url} alt="" loading="lazy" className="w-full h-full object-cover absolute inset-0" />
@@ -22,6 +27,6 @@ export function AlbumCard({ album }) {
           {missing > 0 && ` · missing ${missing}`}
         </div>
       </div>
-    </div>
+    </Link>
   )
 }

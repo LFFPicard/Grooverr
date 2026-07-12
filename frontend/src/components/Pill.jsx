@@ -9,7 +9,7 @@ export function Pill({ variant, children, title }) {
   return (
     <span
       title={title}
-      className={`text-[0.7rem] font-semibold px-2.5 py-1 rounded-full text-center whitespace-nowrap ${VARIANTS[variant] ?? VARIANTS.queued}`}
+      className={`inline-block max-w-full text-[0.7rem] font-semibold px-2.5 py-1 rounded-full text-center whitespace-nowrap overflow-hidden text-ellipsis align-middle ${VARIANTS[variant] ?? VARIANTS.queued}`}
     >
       {children}
     </span>
