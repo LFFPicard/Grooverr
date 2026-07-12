@@ -4,6 +4,7 @@ Grooverr backend — FastAPI application entrypoint.
 Batch 1: app boots, health check, DB init (WAL mode), serves built frontend.
 Batch 4: queue worker pool runs inside this process (Section 9.3); SSE and
 queue endpoints under /api/queue.
+Batch 5: core REST API — search, library, settings, stats.
 """
 import os
 from contextlib import asynccontextmanager
@@ -12,21 +13,29 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
+from app import runtime
+from app.api.library import router as library_router
+from app.api.search import router as search_router
+from app.api.settings import router as settings_router
+from app.api.stats import router as stats_router
 from app.db import init_db
-from app.queue import QueueService, WorkerPool, hub
+from app.queue import WorkerPool, hub
+from app.queue.pipeline import Pipeline
 from app.queue.routes import router as queue_router
 
 FRONTEND_DIST = os.environ.get("FRONTEND_DIST", "/app/frontend_dist")
 
-# Process-wide queue service; the worker pool is created per app lifespan.
-queue_service = QueueService()
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    runtime.configure_logging()
     init_db()
     hub.bind_loop()
-    pool = WorkerPool(queue_service)
+    # Workers share the process-wide resolver (one MusicBrainz rate limiter).
+    pool = WorkerPool(
+        runtime.queue_service,
+        pipeline=Pipeline(runtime.queue_service, resolver=runtime.resolver),
+    )
     pool.start()
     try:
         yield
@@ -36,6 +45,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Grooverr", lifespan=lifespan)
 app.include_router(queue_router)
+app.include_router(search_router)
+app.include_router(library_router)
+app.include_router(settings_router)
+app.include_router(stats_router)
 
 
 @app.get("/api/health")

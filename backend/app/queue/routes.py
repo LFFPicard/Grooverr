@@ -14,8 +14,10 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlmodel import Session, select
 
+from app.api.schemas import Page, QueueItemOut
 from app.db import engine
 from app.downloader.ytdlp import SUPPORTED_FORMATS
 from app.models import JobStatus, JobType, QueueItem, Track
@@ -27,9 +29,8 @@ KEEPALIVE_SECONDS = 15
 
 
 def get_queue_service():
-    """Injected at app startup (main.py) — one QueueService per process."""
-    from app.main import queue_service
-    return queue_service
+    from app import runtime
+    return runtime.queue_service
 
 
 class AddTrackRequest(BaseModel):
@@ -57,33 +58,37 @@ def add_track(body: AddTrackRequest):
     return {"track_id": track_id, "job_id": job_id}
 
 
-@router.get("")
+@router.get("", response_model=Page[QueueItemOut])
 def list_jobs(
     status: Optional[JobStatus] = None,
     job_type: Optional[JobType] = None,
     limit: int = 100,
     offset: int = 0,
 ):
+    limit = max(1, min(limit, 500))
     with Session(engine) as session:
         query = select(QueueItem, Track).join(Track, isouter=True)
         if status is not None:
             query = query.where(QueueItem.status == status)
         if job_type is not None:
             query = query.where(QueueItem.job_type == job_type)
-        query = (
+        total = session.exec(
+            select(func.count()).select_from(query.subquery())
+        ).one()
+        rows = session.exec(
             query.order_by(QueueItem.priority, QueueItem.created_at)
-            .limit(min(limit, 500))
+            .limit(limit)
             .offset(offset)
-        )
-        rows = session.exec(query).all()
-        return [
-            {
+        ).all()
+        items = [
+            QueueItemOut(
                 **job.model_dump(),
-                "track_title": track.title if track else None,
-                "track_status": track.status if track else None,
-            }
+                track_title=track.title if track else None,
+                track_status=track.status.value if track else None,
+            )
             for job, track in rows
         ]
+    return Page(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.post("/{job_id}/retry")

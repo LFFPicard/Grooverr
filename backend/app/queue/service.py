@@ -104,6 +104,29 @@ class QueueService:
         self.wake.set()
         return track_id, job_id
 
+    def enqueue_resolve(
+        self,
+        track_id: str,
+        quality: Optional[str] = None,
+        output_format: Optional[str] = None,
+    ) -> str:
+        """Metadata-resolve job for an existing track row."""
+        with Session(engine) as session:
+            job = QueueItem(
+                track_id=track_id,
+                job_type=JobType.metadata_resolve,
+                priority=PRIORITY_RESOLVE,
+                requested_quality=quality,
+                requested_format=output_format,
+            )
+            session.add(job)
+            session.commit()
+            track = session.get(Track, track_id)
+            hub.publish("queue_update", _job_event(job, track.title if track else None))
+            job_id = job.id
+        self.wake.set()
+        return job_id
+
     def enqueue_download(
         self,
         track_id: str,
