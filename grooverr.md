@@ -61,7 +61,7 @@ The end state: drop in an artist, album, track, or playlist link, and Grooverr p
 - Multi-user accounts or permissions
 - Mobile app (responsive web UI is sufficient)
 - Built-in music player (this is a library *acquisition and organization* tool, playback is Plex/Navidrome/Jellyfin's job)
-- Automatic "watch this artist for new releases" (may be a v2 feature — flagged in backlog, not built now)
+- Automatic "watch this artist for new releases" (may be a v2 feature — flagged in backlog, not built now). **Decision (resolved 2026-07-12):** for v1, "add artist" from search creates the `Artist` row only — it does not pull or queue their discography. Full Lidarr-style discography monitoring is a v2 feature, deliberately deferred.
 - Lyrics embedding (may be added later, not a v1 requirement)
 - Any Spotify integration whatsoever. Spotify required a Premium developer account, hit API app-creation limits, and returned inconsistently-shaped data during the spotDL-GUI build — not worth the dependency for a "download music you already have the right to" tool. **MusicBrainz + YouTube Music cover the full feature set**, including playlist import (via YouTube Music links).
 
@@ -149,14 +149,31 @@ QueueItem
 Settings
   key (pk)
   value (json)
-  -- e.g. default_quality_ceiling, musicbrainz_rate_limit, output_path_template, spotify_client_id, etc.
+  -- e.g. default_quality_ceiling, musicbrainz_rate_limit, output_path_template, etc.
+
+Playlist
+  id (uuid, pk)
+  name
+  source (youtube-music)
+  source_url
+  source_playlist_id
+  created_at
+
+PlaylistTrack
+  id (uuid, pk)
+  playlist_id (fk -> Playlist)
+  track_id (fk -> Track)
+  position (int)     -- track order within the playlist
 ```
+
+**Decision (resolved 2026-07-12):** Playlist/PlaylistTrack tables are added per the above — additive migration, no changes to existing tables required. This is what "Complete this playlist" (Section 7.4) groups against; without it there's nothing to track playlist membership by once tracks are enqueued individually.
 
 **Indexes required (non-negotiable, see Section 9):**
 - `Track.album_id`, `Track.status`
 - `Album.artist_id`
 - `QueueItem.status`, `QueueItem.job_type`
 - Composite index on `(Album.artist_id, Album.title)` for library search
+- `PlaylistTrack.playlist_id`, `PlaylistTrack.track_id`
 
 ---
 
@@ -180,7 +197,7 @@ Rules:
 - Track number always zero-padded to 2 digits
 - Illegal filesystem characters (`/ \ : * ? " < > |`) stripped or replaced with `-`
 - This template must be **user-configurable in Settings** (stored as a Jinja-style template string), but the above is the default and what ships out of the box
-- Embedded cover art is mandatory on every file (pulled from the metadata source, highest resolution available)
+- Embedded cover art is **attempted on every file** (pulled from the metadata source, highest resolution available). **Decision (resolved 2026-07-12):** if no art is available (e.g. Cover Art Archive has no image for a release), the download proceeds without it — logged as a warning, not a failure. A track with correct audio and tags but no artwork is a better outcome than a failed download; Picard itself doesn't fail on missing art either. Missing-art tracks should be visually flagged in the Library UI (Batch 7) so the user can spot and manually fix them if they care to, but this never blocks the pipeline.
 - ID3/Vorbis tags written: title, artist, album artist, album, track number, disc number, year, genre (if available), MusicBrainz track/release/artist IDs (as custom tags — this is what makes it Picard-compatible for future re-tagging)
 
 ---
@@ -255,7 +272,7 @@ Dark mode variant (toggle, not default) — see the reference mockup for exact d
 
 ### Screens required
 
-1. **Dashboard** — stat row (downloading / queued / library size / incomplete albums), active queue panel, recent activity feed, "incomplete albums" grid teaser. *(Reference: the Style B mockup already built — use it as the literal starting point, do not redesign from scratch.)*
+1. **Dashboard** — stat row (downloading / queued / library size / incomplete albums), active queue panel, recent activity feed, "incomplete albums" grid teaser. *(Reference: `/design/dashboard-reference.html` in the repo — this is the confirmed Sleeve Catalog mockup, use it as the literal starting point, do not redesign from scratch. It's a static standalone HTML file with inline CSS; treat its layout, spacing, and component structure as canonical, and port it into the actual React component structure rather than reinventing it.)*
 2. **Search** — search bar (same as dashboard's, or a dedicated larger version), result cards for tracks/albums/artists/playlists, "Add to library" action per result
 3. **Library** — full browsable grid of all albums, filterable by artist / completeness status / format, each card shows the completion badge pattern from the dashboard mockup. Clicking an album opens an **Album Detail** view listing every track with its individual status (downloaded / missing / queued / error) and a per-track "download this one" action
 4. **Queue** — full queue view (not just the dashboard teaser), split into Resolving / Downloading tabs, with retry/cancel per item
@@ -441,6 +458,17 @@ Each batch below is scoped to be a self-contained agent session. **Confirm the "
 
 ## 11. Open questions / assumptions log
 
+### Resolved during Batches 1–5 review (2026-07-12)
+
+Four decisions were flagged by the implementing agent as blockers before Batch 6/7. All four are now resolved and reflected inline in the relevant sections above:
+
+1. **Dashboard mockup** — was missing from the repo. Now provided at `/design/dashboard-reference.html`. Section 8 updated to point at it directly.
+2. **Playlist data model** — `Playlist`/`PlaylistTrack` tables added to Section 5 (additive migration). Required for "Complete this playlist" (Section 7.4) to have something to group against.
+3. **Cover art on missing artwork** — confirmed current behavior (warn + proceed without art) is correct, not a bug. Section 6 wording softened from "mandatory" to "attempted, non-blocking." Missing-art tracks should be visually flagged in the Library UI (Batch 7).
+4. **Add-artist scope** — confirmed row-only for v1 is correct. Full discography pulling/monitoring explicitly deferred to v2 in Section 3's non-goals.
+
+### Original assumptions log
+
 Track anything the agent has to assume here so it can be reviewed and corrected rather than silently baked in:
 
 - **Assumed:** Output formats supported = mp3, flac, m4a, opus, wav, ogg (same set as spotDL-GUI). Confirm if this should change.
@@ -448,23 +476,6 @@ Track anything the agent has to assume here so it can be reviewed and corrected 
 - **Assumed:** No built-in scheduler for "watch artist for new releases" in v1 — flagged as a backlog item, not built now.
 - **Open:** Exact logo asset — placeholder monogram until a real logo is supplied.
 - **Open:** Whether genre tagging pulls from MusicBrainz's genre/tag data or is left blank when unavailable — needs a decision before Batch 3.
-- **Assumed (Batch 2):** "Canonical release" selection was undefined. A recording/album often exists as original pressing, promos, vinyl, and anniversary reissues, all scoring 100 in MB search — and the reissue can have a different `total_tracks` (RAM: 13 vs 22), which would corrupt completeness tracking. Heuristic implemented: exact title match > Official status > Album-type release group > CD/Digital Media pressing > earliest release date. Additionally, exact title+artist matches are admitted down to `min_score − 10`, because MB's Lucene relevance under-scores originals relative to remasters (observed live: original RAM recording scored 84, the 2023 remaster 100).
-- **Assumed (Batch 2):** Resolver populates `genre` from MusicBrainz genre votes (release-level first, falling back to release-group where the community votes actually live), picking the highest-voted name; null when MB has none. YouTube Music provides no genre. This partially answers the open genre question above — Batch 3 just tags what the resolver provides and leaves genre blank otherwise.
-- **Noted (Batch 2):** YouTube Music search returns *something* for almost any query, including gibberish — so the MB→YTM fallback virtually never yields "no match", it yields a low-quality match with `source: youtube-music`. The duration-tolerance matching at download time (Section 7.3, Batch 3) is the real anti-mismatch gate; the UI should also surface the metadata source per track so a YTM-only resolution is visible.
-- **Noted (Batch 2):** MusicBrainz search results title tracks by *recording*, which can carry hidden-track annotations ("Supersymmetry / [unknown]"); the resolver prefers the release's track title, which is what Picard tags with.
-- **Assumed (Batch 3):** The Section 6 "Jinja-style" path template is implemented as simple `{Token}` substitution (all default-template tokens supported, unknown tokens raise at render time so a bad Settings template fails loudly). Full Jinja can be swapped in at Batch 8 if conditional templates are wanted. When `release_year` is unknown the " ({ReleaseYear})" decoration is dropped rather than rendering "(None)".
-- **Assumed (Batch 3):** Cover art is embedded on every file (Section 6 "mandatory"), but an *unfetchable* image (CAA 404/timeouts) degrades to a warning on the download result rather than failing the download. Requested quality is a bitrate ceiling in kbps: caps source-stream selection and the ffmpeg re-encode for lossy targets; ignored for flac/wav (lossless containers of a lossy source).
-- **Assumed (Batch 3):** `{AlbumArtist}` comes from the *release's* artist credit, never the track credit — otherwise "Daft Punk feat. Nile Rodgers" gets its own library folder. The full track credit still goes into the artist tag (TPE1/ARTIST).
-- **Noted (Batch 3):** For heavily-bootlegged songs, MB recording search without album context returned *only* live bootlegs in the top 25 ("T.N.T." / AC/DC). Recording search now runs two passes: `status:official AND primarytype:album AND NOT secondarytype:live` first, unconstrained retry if empty. Side effect of the CD/Digital-pressing preference: pre-CD-era tracks resolved without album context can carry the earliest *CD* pressing's year (e.g. Bohemian Rhapsody → 1986) rather than the original vinyl year — acceptable for v1; fixable later via release-group `first-release-date`.
-- **Noted (Batch 3):** YouTube data downloads can transiently return HTTP 403 (observed once, succeeded on immediate retry) — Batch 4's queue workers should treat yt-dlp failures as retryable.
-- **Assumed (Batch 4):** Two additive schema extensions (per Section 5's "may extend, flag it"): `QueueItem.requested_format` (per-download output format travels with the job, like `requested_quality` does) and `Album.genre` (resolver-provided genre must survive to tagging time). Applied via a minimal additive column migration in `init_db`.
-- **Assumed (Batch 4):** `music_root` comes from the `MUSIC_DIR` env var (a Docker volume, like `CONFIG_DIR`), not from the Settings table. Worker concurrency (`download_concurrency`, default 3) is read from Settings at pool startup — changing it requires an app restart until the Settings UI (Batch 8) wires a pool resize.
-- **Assumed (Batch 4):** One worker pool handles both job types; resolve jobs run at higher priority (50 vs 100) so metadata keeps flowing while download slots are busy. Cancel applies to *queued* jobs only — cancelling an in-flight download mid-transfer is deferred to the full queue UI (Batch 7). Failed jobs are not auto-retried in Batch 4 (manual retry endpoint only); auto-retry with backoff for transient yt-dlp failures is a Batch 10 hardening item.
-- **Noted (Batch 4):** Crash-recovery testing exposed that a resolve job killed after enqueueing its download would duplicate the download on recovery — `enqueue_download` is now idempotent per track (reuses outstanding queued/active jobs).
-- **Assumed (Batch 5):** "Add artist to library" creates the Artist row only — auto-adding the discography (Lidarr-style artist monitoring) is not in the v1 data model and stays out of scope per the Non-goals watchlist item. Flagging: the Section 5 data model also has **no Playlist entity**, so "Complete this playlist" (Section 7.4) has nothing to group by — playlist adds currently enqueue each track individually. A `Playlist`/`PlaylistTrack` table needs a decision before Batch 7 builds that button.
-- **Assumed (Batch 5):** Free-text search takes ~2-4s: up to two rate-limited MusicBrainz requests per category (studio-first pass, then unconstrained). Search is submit-based, not search-as-you-type, so this is acceptable for v1. MB results are token-similarity re-ranked (mashups/bootlegs embed artist names in titles and out-score the real song on MB relevance).
-- **Assumed (Batch 5):** Album dedup on add: match by release MBID first, then (artist, title) — two same-titled albums by one artist would collide on the same output folder anyway, so title-level merging is intentional.
-- **Noted (Batch 5):** With no quality ceiling, yt-dlp's mp3/ogg re-encode defaulted to ffmpeg's ~128k — now VBR q0 (~245k) for mp3/ogg, 192k for m4a; opus is stream-copied so no re-encode loss. Verified live: 276 kbps VBR output.
 
 ---
 
