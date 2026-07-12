@@ -14,7 +14,7 @@ import logging
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import httpx
 from pydantic import BaseModel
@@ -102,6 +102,7 @@ class DownloadEngine:
         album_artist: Optional[str] = None,
         multi_disc: Optional[bool] = None,
         match: Optional[AudioMatch] = None,
+        progress_callback: Optional[Callable[[int], None]] = None,
     ) -> DownloadResult:
         """Download, tag and place one track. `multi_disc` drives the
         Section 6 disc-prefix rule; when the caller doesn't know the album's
@@ -146,6 +147,7 @@ class DownloadEngine:
                     output_format,
                     quality_kbps,
                     self.ffmpeg_path,
+                    progress_callback,
                 )
             except YtdlpDownloadError as exc:
                 raise DownloadFailure(str(exc)) from exc

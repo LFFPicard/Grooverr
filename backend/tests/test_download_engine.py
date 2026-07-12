@@ -47,8 +47,11 @@ class NoSearchYT:
 
 
 async def test_full_pipeline_offline(ffmpeg, tmp_path, monkeypatch):
-    def fake_download(video_id, dest_dir, output_format, quality_kbps, ffmpeg_path):
+    def fake_download(video_id, dest_dir, output_format, quality_kbps, ffmpeg_path,
+                      progress_callback=None):
         assert video_id == "vid123"
+        if progress_callback:
+            progress_callback(50)
         produced = make_silent_file(ffmpeg, dest_dir, output_format)
         return produced.rename(dest_dir / f"{video_id}.{output_format}")
 
@@ -76,7 +79,7 @@ async def test_full_pipeline_offline(ffmpeg, tmp_path, monkeypatch):
 async def test_multi_disc_defaults_from_disc_number(ffmpeg, tmp_path, monkeypatch):
     monkeypatch.setattr(
         engine_module, "download_audio",
-        lambda video_id, dest_dir, output_format, quality_kbps, ffmpeg_path:
+        lambda video_id, dest_dir, output_format, quality_kbps, ffmpeg_path, progress_callback=None:
             make_silent_file(ffmpeg, dest_dir, output_format),
     )
     engine = DownloadEngine(music_root=str(tmp_path / "music"), ytmusic=NoSearchYT())

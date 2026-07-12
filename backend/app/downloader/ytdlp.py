@@ -7,7 +7,7 @@ Blocking (yt-dlp is sync); the engine wraps calls in asyncio.to_thread.
 import os
 import shutil
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import yt_dlp
 
@@ -51,6 +51,7 @@ def download_audio(
     output_format: str = "mp3",
     quality_kbps: Optional[int] = None,
     ffmpeg_path: Optional[str] = None,
+    progress_callback: Optional[Callable[[int], None]] = None,
 ) -> Path:
     """Download + convert one video's audio. Returns the converted file path
     inside dest_dir. Raises YtdlpDownloadError on any failure."""
@@ -89,6 +90,21 @@ def download_audio(
         "no_warnings": True,
         "noprogress": True,
     }
+    if progress_callback is not None:
+        # Transfer maps to 0-95%; the last 5% is the ffmpeg conversion.
+        # Invoked on yt-dlp's worker thread — callbacks must be thread-safe.
+        def hook(status: dict) -> None:
+            if status.get("status") != "downloading":
+                return
+            total = status.get("total_bytes") or status.get("total_bytes_estimate")
+            done = status.get("downloaded_bytes")
+            if isinstance(total, (int, float)) and total > 0 and isinstance(done, (int, float)):
+                try:
+                    progress_callback(min(95, int(done / total * 95)))
+                except Exception:
+                    pass  # progress reporting must never kill the download
+
+        options["progress_hooks"] = [hook]
 
     url = f"https://www.youtube.com/watch?v={video_id}"
     try:

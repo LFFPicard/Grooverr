@@ -73,6 +73,9 @@ class Album(SQLModel, table=True):
     album_type: AlbumType = Field(default=AlbumType.album)
     total_tracks: Optional[int] = None
     cover_art_url: Optional[str] = None
+    # Extension over the Section 5 field list (flagged in Section 11): genre
+    # from the metadata source, needed at tagging time (Section 6 tag set).
+    genre: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -103,7 +106,10 @@ class QueueItem(SQLModel, table=True):
     status: JobStatus = Field(default=JobStatus.queued, index=True)
     progress_percent: int = Field(default=0)
     priority: int = Field(default=100)
-    requested_quality: Optional[str] = None
+    requested_quality: Optional[str] = None      # bitrate ceiling in kbps
+    # Extension over the Section 5 field list (flagged in Section 11): the
+    # per-download output format travels with the job like the quality does.
+    requested_format: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
