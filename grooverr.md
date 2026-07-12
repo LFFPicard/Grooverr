@@ -477,6 +477,11 @@ Track anything the agent has to assume here so it can be reviewed and corrected 
 - **Open:** Exact logo asset — placeholder monogram until a real logo is supplied.
 - **Open:** Whether genre tagging pulls from MusicBrainz's genre/tag data or is left blank when unavailable — needs a decision before Batch 3.
 
+### Batch 6 additions (2026-07-12)
+
+- **Assumed:** Batch 6's Dashboard scope implies a "Recent Activity" data source that Section 10 doesn't explicitly define. Added `GET /api/activity` — the newest N finished/errored `QueueItem`s joined to `Track`/`Album`/`Artist`, not paginated (always "latest N", no `offset`). Also extended `QueueItemOut` with `artist_name`/`album_title` (queue rows otherwise can't render "Artist · Album" subtitles). Both are small additive extensions, no schema changes.
+- **Noted:** The dashboard-reference mockup's search placeholder text and one "Added artist watch" activity example are relics of an earlier product ("SpotGet") this mockup was adapted from — branding was corrected to Grooverr and the artist-watch example dropped (matches the Section 3 non-goal), everything else ported as-is.
+
 ---
 
 *End of specification.*
