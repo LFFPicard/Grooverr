@@ -143,6 +143,23 @@ def test_claim_order_priority_then_age(clean_db):
     assert queue.claim_next() is None
 
 
+def test_enqueue_download_is_idempotent_per_track(clean_db):
+    queue = QueueService()
+    track_id, _ = queue.add_track_request("Song A")
+    first = queue.enqueue_download(track_id)
+    second = queue.enqueue_download(track_id)   # e.g. re-run recovered resolve job
+    assert first == second
+    with Session(engine) as session:
+        downloads = session.exec(
+            select(QueueItem).where(QueueItem.job_type == JobType.download)
+        ).all()
+        assert len(downloads) == 1
+    # A finished download doesn't block a fresh re-download request.
+    queue.finish(first)
+    third = queue.enqueue_download(track_id)
+    assert third != first
+
+
 def test_recovery_resets_stuck_jobs_and_tracks(clean_db):
     queue = QueueService()
     track_id, _ = queue.add_track_request("Song A")

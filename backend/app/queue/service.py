@@ -112,6 +112,17 @@ class QueueService:
         session: Optional[Session] = None,
     ) -> str:
         def _create(s: Session) -> str:
+            # Idempotent per track: a resolve job crash-recovered after it
+            # already enqueued the download must not duplicate the work.
+            existing = s.exec(
+                select(QueueItem).where(
+                    QueueItem.track_id == track_id,
+                    QueueItem.job_type == JobType.download,
+                    QueueItem.status.in_((JobStatus.queued, JobStatus.active)),  # type: ignore[attr-defined]
+                )
+            ).first()
+            if existing is not None:
+                return existing.id
             job = QueueItem(
                 track_id=track_id,
                 job_type=JobType.download,
