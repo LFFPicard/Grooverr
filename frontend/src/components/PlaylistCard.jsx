@@ -33,8 +33,15 @@ function CompletePlaylistButton({ playlistId }) {
   )
 }
 
+function m3uFileName(path) {
+  if (!path) return null
+  return path.split(/[\\/]/).pop()
+}
+
 export function PlaylistCard({ playlist }) {
   const isComplete = playlist.completeness === 'complete'
+  const manifestName = m3uFileName(playlist.m3u_path)
+
   return (
     <LibraryCard
       title={playlist.name}
@@ -43,11 +50,21 @@ export function PlaylistCard({ playlist }) {
       expectedTracks={playlist.total_tracks}
       completeness={playlist.completeness}
       action={
-        isComplete ? (
-          <span className="text-[0.82rem] text-sage font-semibold">✓ Complete</span>
-        ) : (
-          <CompletePlaylistButton playlistId={playlist.id} />
-        )
+        <div className="flex flex-col gap-2">
+          {isComplete ? (
+            <span className="text-[0.82rem] text-sage font-semibold">✓ Complete</span>
+          ) : (
+            <CompletePlaylistButton playlistId={playlist.id} />
+          )}
+          {manifestName && (
+            <div
+              className="text-[0.7rem] text-text-faint truncate font-mono"
+              title={`Playlists/${manifestName} — regenerated as tracks finish downloading`}
+            >
+              📄 Playlists/{manifestName}
+            </div>
+          )}
+        </div>
       }
     />
   )
