@@ -1,14 +1,15 @@
-# Grooverr — Progress Summary (Batches 1–5)
+# Grooverr — Progress Summary (Batches 1–9)
 
-*Last updated: 2026-07-12*
+*Last updated: 2026-07-14*
 
 ## Where things stand
 
-The entire backend is built, tested, and verified against real services. 117 tests
-pass, the working tree is clean, and every batch's Definition of Done was exercised
-live — real MusicBrainz lookups, real YouTube Music downloads, real crash-recovery
-kill tests. What remains is the frontend (Batches 6–7), settings UI (8), packaging
-(9), and hardening (10).
+Backend, frontend, settings, and packaging are all built, tested, and verified
+against real services. 161 backend tests pass, the frontend builds clean, and
+every batch's Definition of Done was exercised live — real MusicBrainz lookups,
+real YouTube Music downloads, real crash-recovery kill tests, a real containerized
+end-to-end download through a genuine host bind mount. What remains is hardening
+(Batch 10).
 
 ## Batch-by-batch
 
@@ -71,37 +72,63 @@ relevance ranked mashups first (Jaccard token re-ranking, earliest-release
 tie-break); and "best quality" silently produced 128 kbps mp3s (now ~276 kbps VBR
 q0 for mp3/ogg, 192k m4a, stream-copy for opus).
 
-## Decisions required before continuing
+### Batch 6 — Dashboard + Search ✅
 
-All of these are also flagged in the grooverr.md Section 11 assumptions log.
+Live frontend against SSE, Sleeve Catalog design tokens applied per the
+resolved mockup decision. End-to-end pipeline (search → add → watch it
+download) verified in-browser.
 
-### 1. The Batch 6 blocker: the dashboard mockup ⛔
+### Batch 7 — Library, Album Detail, Playlists, full Queue ✅
 
-The spec says to build the Dashboard "exactly per the confirmed mockup (Style B /
-Sleeve Catalog)… use it as the literal starting point, do not redesign from
-scratch" — but that mockup is not in the repo. **Needed: the mockup (image or
-HTML), or explicit permission to design from the Section 8 written spec alone.**
+`Playlist`/`PlaylistTrack` tables added (resolved decision 2). Library rebuilt
+as a single virtualized grid shared by Albums/Playlists tabs. Playlists
+generate M3U8 manifests rather than duplicating audio (Section 6.1, resolved
+2026-07-14). Added a mandatory duration cross-check to stop pre-existing
+video-id mismatches from silently attaching the wrong audio.
 
-### 2. Playlists have no data model
+### Batch 8 — Settings screen + credential handling ✅
 
-Section 7.4 promises "Complete this playlist," but Section 5 defines no Playlist
-table, so there is nothing to group playlist tracks by — adds currently enqueue
-each track individually and the grouping is lost. **Decide before Batch 7:** add
-`Playlist`/`PlaylistTrack` tables (recommended — a small additive migration), or
-drop playlist completeness for v1.
+MusicBrainz user-agent, YouTube cookie upload, default quality ceiling, and
+output path template (with live preview) all wired to a real Settings API and
+persisted in `/config`. M3U8 paths made relative and the playlist output
+folder made configurable.
 
-### 3. Cover-art "mandatory" vs. unfetchable
+### Batch 9 — Packaging & Unraid template ✅
 
-Section 6 says embedded art is mandatory on every file, but Cover Art Archive
-images are sometimes missing. Current behaviour: the download succeeds with a
-logged warning and no art. **Confirm this is acceptable**, or missing art should
-fail the download instead.
+Multi-stage Dockerfile (Node build stage discarded, only `dist/` copied into
+the final Python image), non-root by default via a PUID/PGID-aware
+`entrypoint.sh` (`setpriv`, LinuxServer.io/Unraid convention), `tini` as PID 1,
+`/api/health` HEALTHCHECK. `docker-compose.yml`, an Unraid CA template
+(`unraid/grooverr.xml`), a GitHub Actions workflow to build/push to Docker Hub
+on push to `main`, and a README.
 
-### 4. "Add artist" scope
+Verified live: a real image build (zero warnings), a real container boot with
+a genuine host-directory bind mount (not Docker's anonymous-volume fallback),
+confirmed non-root execution and correct PUID/PGID remapping via the actual
+process tree, and a real search → add → download through the container's API
+landing correctly on the host at the right path with correct in-container
+ownership. Not independently verified: a literal Unraid host, and a real
+GitHub Actions run (see Section 11 of grooverr.md for the full list of what
+was and wasn't verified and why).
 
-Adding an artist from search currently creates the artist row only. Lidarr-style
-discography pulling/monitoring is a much bigger feature that the Non-goals section
-appears to defer to v2. **Confirm row-only is acceptable for v1.**
+## Decisions resolved along the way
+
+- **The dashboard mockup** — added to the repo (`design/dashboard-reference.html`);
+  Batch 6 built against it directly.
+- **Playlists had no data model** — resolved: `Playlist`/`PlaylistTrack` tables
+  added in Batch 7. Further resolved in Section 6.1 (2026-07-14): playlists
+  generate an M3U8 manifest rather than duplicating audio files, with a
+  configurable, relative-path output folder (Batch 8).
+- **"Add artist" scope** — row-only for v1 stands; full discography
+  pulling/monitoring remains an explicitly deferred v2 feature (Non-goals,
+  Section 3).
+
+## Still open (no decision needed yet, flagged for awareness)
+
+- **Cover-art "mandatory" vs. unfetchable** — Section 6 says embedded art is
+  mandatory, but Cover Art Archive images are sometimes missing. Current
+  behaviour: the download succeeds with a logged warning and no art. Revisit
+  if this needs to become a hard failure instead.
 
 ## Smaller items (awareness, no decision needed)
 
@@ -113,11 +140,17 @@ appears to defer to v2. **Confirm row-only is acceptable for v1.**
 - Changing worker concurrency requires an app restart until the Batch 8 settings
   UI wires a pool resize.
 - The output path template is simple `{Token}` substitution rather than full
-  Jinja — revisit at Batch 8 if conditional templates are wanted.
+  Jinja — still true, not revisited; no conditional-template need has come up.
 - YouTube data downloads can transiently 403; manual retry works today, auto-retry
   with backoff is a Batch 10 hardening item.
+- Final Docker image is ~955MB, ~461MB of which is the ffmpeg/tini/curl apt layer.
+  Not pursued further — see grooverr.md Section 11 for the reasoning.
 
 ## Recommended order from here
 
-Resolve decision 1 → build Batch 6 (Dashboard + Search — the first batch where the
-whole system runs end-to-end through a UI) → decide 2 before Batch 7.
+Batch 10 (hardening): auto-retry with backoff for transient YouTube 403s, and
+whatever else the spec's Section 10 hardening scope calls for. Batch 9's Docker
+image was verified locally (real build, real bind-mounted container, real
+end-to-end download) but not against a literal Unraid host or a real GitHub
+Actions run — worth a first real deploy to close that loop before declaring v1
+done.
