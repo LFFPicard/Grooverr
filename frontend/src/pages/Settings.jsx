@@ -209,9 +209,14 @@ export default function Settings() {
           id="mb-ua"
           value={form.musicbrainz_user_agent}
           onChange={(event) => update('musicbrainz_user_agent', event.target.value)}
-          placeholder="Grooverr/0.1.0 ( https://github.com/you/grooverr )"
+          placeholder="Grooverr/0.1.0 ( https://github.com/LFFPicard/Grooverr )"
           className={inputClass}
         />
+        <p className="text-[0.74rem] text-text-faint mt-1.5">
+          Identifies this application to MusicBrainz — not a personal nickname. Almost nobody
+          needs to change this from the default; only customize it if you're running a modified
+          fork or want a distinct contact string for this deployment.
+        </p>
       </Section>
 
       <Section title="YouTube cookies" description="Optional — only needed to download age-restricted or region-locked videos.">
