@@ -126,6 +126,8 @@ class PlaylistSummary(BaseModel):
     total_tracks: int = 0
     downloaded_tracks: int = 0
     completeness: str
+    m3u_path: Optional[str] = None
+    m3u_generated_at: Optional[datetime] = None
     created_at: datetime
 
 

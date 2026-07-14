@@ -19,7 +19,8 @@ from sqlmodel import Session, select
 
 from app.db import engine as db_engine
 from app.downloader.engine import DownloadEngine, DownloadFailure
-from app.models import Album, Artist, AudioSource, QueueItem, Track, TrackStatus
+from app.downloader.m3u import regenerate_playlist_m3u
+from app.models import Album, Artist, AudioSource, Playlist, PlaylistTrack, QueueItem, Track, TrackStatus
 from app.queue.service import PLACEHOLDER_ALBUM_TITLE, QueueService
 from app.resolver.engine import MetadataResolver
 from app.resolver.schemas import MetadataSource, ResolvedTrack
@@ -218,6 +219,16 @@ class Pipeline:
                 track.error_message = None
                 session.add(track)
                 session.commit()
+
+                # Section 6.1: regenerate the manifest of any playlist this
+                # track belongs to, now that it has a file_path.
+                member_playlists = session.exec(
+                    select(Playlist)
+                    .join(PlaylistTrack, PlaylistTrack.playlist_id == Playlist.id)
+                    .where(PlaylistTrack.track_id == track.id)
+                ).all()
+                for playlist in member_playlists:
+                    regenerate_playlist_m3u(session, playlist)
         for warning in result.warnings:
             logger.warning("Download of %r: %s", resolved.title, warning)
         self.queue.finish(job.id)

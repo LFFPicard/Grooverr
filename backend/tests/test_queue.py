@@ -15,6 +15,8 @@ from app.models import (
     Artist,
     JobStatus,
     JobType,
+    Playlist,
+    PlaylistTrack,
     QueueItem,
     Track,
     TrackStatus,
@@ -243,6 +245,38 @@ async def test_enqueue_to_downloaded_end_to_end(clean_db):
     # Both jobs completed; quality ceiling propagated resolve → download.
     assert job_states() == {("metadata_resolve", "done"), ("download", "done")}
     assert downloader.calls[0]["quality"] == 192
+
+
+async def test_download_completion_regenerates_member_playlist_m3u(clean_db):
+    """Section 6.1: a track's download completing must regenerate the
+    manifest of every playlist it belongs to, via the same _download
+    code path — not a separate hook the pipeline could skip."""
+    queue = QueueService()
+    downloader = FakeDownloader()
+    pipeline = Pipeline(queue, resolver=FakeResolver(), downloader=downloader)
+    track_id, _ = queue.add_track_request("Real Song", artist="Real Artist")
+
+    with Session(engine) as session:
+        playlist = Playlist(name="Auto Playlist")
+        session.add(playlist)
+        session.flush()
+        session.add(PlaylistTrack(playlist_id=playlist.id, track_id=track_id, position=1))
+        session.commit()
+        playlist_id = playlist.id
+
+    await run_pool_until(
+        queue, pipeline,
+        lambda: get_track(track_id).status == TrackStatus.downloaded,
+    )
+
+    with Session(engine) as session:
+        playlist = session.get(Playlist, playlist_id)
+        assert playlist.m3u_path is not None
+        assert playlist.m3u_generated_at is not None
+        track = session.get(Track, track_id)
+        content = open(playlist.m3u_path, encoding="utf-8").read()
+        assert track.file_path in content
+        assert "#EXTM3U" in content
 
 
 async def test_download_failure_lands_on_track_and_job(clean_db):

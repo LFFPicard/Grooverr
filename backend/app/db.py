@@ -50,6 +50,8 @@ def init_db():
         _ensure_column(connection, "queueitem", "requested_format", "requested_format VARCHAR")
         _ensure_column(connection, "track", "has_artwork", "has_artwork BOOLEAN")
         _ensure_column(connection, "track", "youtube_video_id", "youtube_video_id VARCHAR")
+        _ensure_column(connection, "playlist", "m3u_path", "m3u_path VARCHAR")
+        _ensure_column(connection, "playlist", "m3u_generated_at", "m3u_generated_at DATETIME")
 
 
 def get_session():

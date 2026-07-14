@@ -16,6 +16,7 @@ from app.api.schemas import (
     TrackOut,
 )
 from app.db import engine
+from app.downloader.m3u import regenerate_playlist_m3u
 from app.models import Playlist, PlaylistTrack, Track, TrackStatus
 from app import runtime
 
@@ -54,6 +55,8 @@ def list_playlists(limit: int = Query(default=50, ge=1, le=200), offset: int = Q
                 total_tracks=known,
                 downloaded_tracks=downloaded,
                 completeness=_completeness(downloaded, known),
+                m3u_path=playlist.m3u_path,
+                m3u_generated_at=playlist.m3u_generated_at,
                 created_at=playlist.created_at,
             )
             for playlist, known, downloaded in rows
@@ -81,6 +84,8 @@ def playlist_detail(playlist_id: str):
             total_tracks=len(rows),
             downloaded_tracks=downloaded,
             completeness=_completeness(downloaded, len(rows)),
+            m3u_path=playlist.m3u_path,
+            m3u_generated_at=playlist.m3u_generated_at,
             created_at=playlist.created_at,
             tracks=[
                 PlaylistTrackOut(position=pt.position, track=TrackOut(**track.model_dump()))

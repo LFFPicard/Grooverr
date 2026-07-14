@@ -137,6 +137,10 @@ class Playlist(SQLModel, table=True):
     source: str = Field(default="youtube-music")
     source_url: Optional[str] = None
     source_playlist_id: Optional[str] = Field(default=None, index=True)
+    # Section 6.1 (resolved 2026-07-14): playlists never duplicate audio —
+    # this is the generated manifest referencing existing Artist/Album paths.
+    m3u_path: Optional[str] = None
+    m3u_generated_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 

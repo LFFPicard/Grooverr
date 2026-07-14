@@ -23,6 +23,7 @@ from app.api.schemas import (
     TrackOut,
 )
 from app.db import engine
+from app.downloader.m3u import regenerate_playlist_m3u
 from app.downloader.ytdlp import SUPPORTED_FORMATS
 from app.models import Album, Artist, Playlist, PlaylistTrack, Track, TrackStatus
 from app.resolver.schemas import ResolvedAlbum, ResolvedTrack
@@ -439,6 +440,11 @@ async def add_to_library(body: AddToLibraryRequest):
         session.commit()
         response.added_playlist_id = playlist.id
         response.added_track_ids = [track_id for track_id, _ in new_tracks]
+
+        # Section 6.1: write the initial manifest right away (likely empty
+        # or partial until downloads complete) so the file exists as soon
+        # as the playlist does.
+        regenerate_playlist_m3u(session, playlist)
 
     for track_id, resolved_track in new_tracks:
         # Same rule as a standalone track add: skip straight to download
