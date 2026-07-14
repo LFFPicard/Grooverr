@@ -11,6 +11,8 @@ from typing import Callable, Optional
 
 import yt_dlp
 
+from app.settings_store import config_dir
+
 # Output format → yt-dlp FFmpegExtractAudio codec name.
 _CODEC_BY_FORMAT = {
     "mp3": "mp3",
@@ -22,6 +24,19 @@ _CODEC_BY_FORMAT = {
 }
 SUPPORTED_FORMATS = tuple(_CODEC_BY_FORMAT)
 LOSSY_FORMATS = ("mp3", "m4a", "opus", "ogg")
+
+# Batch 8: optional YouTube cookie export (Netscape cookies.txt format),
+# uploaded via Settings. Stored in CONFIG_DIR — never the music volume.
+YOUTUBE_COOKIES_FILENAME = "youtube_cookies.txt"
+
+
+def youtube_cookies_path() -> Path:
+    return Path(config_dir()) / YOUTUBE_COOKIES_FILENAME
+
+
+def resolve_cookies_path() -> Optional[str]:
+    path = youtube_cookies_path()
+    return str(path) if path.is_file() else None
 
 
 class YtdlpDownloadError(Exception):
@@ -52,9 +67,14 @@ def download_audio(
     quality_kbps: Optional[int] = None,
     ffmpeg_path: Optional[str] = None,
     progress_callback: Optional[Callable[[int], None]] = None,
+    cookies_path: Optional[str] = "unset",
 ) -> Path:
     """Download + convert one video's audio. Returns the converted file path
-    inside dest_dir. Raises YtdlpDownloadError on any failure."""
+    inside dest_dir. Raises YtdlpDownloadError on any failure.
+
+    cookies_path defaults to whatever's currently uploaded in Settings
+    (checked fresh per call, not cached) — pass None explicitly to force no
+    cookies, or a path to override."""
     if output_format not in _CODEC_BY_FORMAT:
         raise YtdlpDownloadError(
             f"Unsupported output format {output_format!r} (supported: {', '.join(SUPPORTED_FORMATS)})"
@@ -90,6 +110,9 @@ def download_audio(
             # stream-copies when source and target codecs match.)
             postprocessor["preferredquality"] = "192"
 
+    if cookies_path == "unset":
+        cookies_path = resolve_cookies_path()
+
     options = {
         "format": fmt,
         "outtmpl": str(dest_dir / "%(id)s.%(ext)s"),
@@ -100,6 +123,8 @@ def download_audio(
         "no_warnings": True,
         "noprogress": True,
     }
+    if cookies_path:
+        options["cookiefile"] = cookies_path
     if progress_callback is not None:
         # Transfer maps to 0-95%; the last 5% is the ffmpeg conversion.
         # Invoked on yt-dlp's worker thread — callbacks must be thread-safe.

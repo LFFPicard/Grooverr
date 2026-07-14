@@ -24,6 +24,7 @@ from app.db import init_db
 from app.queue import WorkerPool, hub
 from app.queue.pipeline import Pipeline
 from app.queue.routes import router as queue_router
+from app.settings_store import get_setting
 
 FRONTEND_DIST = os.environ.get("FRONTEND_DIST", "/app/frontend_dist")
 
@@ -33,6 +34,11 @@ async def lifespan(app: FastAPI):
     runtime.configure_logging()
     init_db()
     hub.bind_loop()
+    # A user-configured MusicBrainz user-agent (Batch 8) must apply to the
+    # process-wide client from the moment it starts serving requests.
+    configured_ua = get_setting("musicbrainz_user_agent")
+    if configured_ua:
+        runtime.resolver.mb.set_user_agent(configured_ua)
     # Workers share the process-wide resolver (one MusicBrainz rate limiter).
     pool = WorkerPool(
         runtime.queue_service,

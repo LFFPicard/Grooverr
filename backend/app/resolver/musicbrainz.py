@@ -184,6 +184,12 @@ class MusicBrainzClient:
     async def close(self):
         await self._client.aclose()
 
+    def set_user_agent(self, user_agent: str) -> None:
+        """Applies immediately to the live client — MusicBrainz rate-limits
+        by user-agent string, so a Settings change (Batch 8) must take
+        effect without an app restart."""
+        self._client.headers["User-Agent"] = user_agent
+
     async def _get(self, path: str, params: dict) -> dict:
         """Rate-limited GET; returns parsed JSON dict ({} on non-dict payloads)."""
         async with self._rate_lock:

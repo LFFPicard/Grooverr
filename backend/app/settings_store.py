@@ -21,11 +21,22 @@ DEFAULTS: dict[str, Any] = {
     "output_path_template": None,            # None = Section 6 default template
     "musicbrainz_user_agent": None,          # None = built-in Grooverr UA
     "duration_tolerance_seconds": 5,
+    "playlist_output_folder": None,          # None = Section 6.1 default ("Playlists")
 }
+# Not part of DEFAULTS/SettingsOut deliberately — set only via the cookie
+# upload/delete endpoints, read via CookieStatus, not the general PUT flow.
+# get_setting()/set_setting() work for any key regardless, so this needs
+# no special-casing; it's just not enumerated for the settings CRUD screen.
+
 
 
 def music_root() -> str:
     return os.environ.get("MUSIC_DIR", "/music")
+
+
+def config_dir() -> str:
+    """Where credentials live (Batch 8) — never the music output volume."""
+    return os.environ.get("CONFIG_DIR", "/config")
 
 
 def get_setting(key: str, session: Session | None = None) -> Any:

@@ -4,12 +4,15 @@ orchestration function that queries the DB and writes the file, and the
 pipeline hook that fires it when a member track's download completes.
 """
 import os
+from pathlib import Path
+from unittest.mock import patch
 
 from sqlmodel import Session
 
 from app.db import engine
 from app.downloader.m3u import regenerate_playlist_m3u
 from app.models import Album, Artist, Playlist, PlaylistTrack, Track, TrackStatus
+from app.settings_store import set_setting
 
 
 def make_track(session, title, status=TrackStatus.missing, file_path=None, position=1):
@@ -99,3 +102,57 @@ def test_regenerate_reflects_growing_completeness(clean_db):
         regenerate_playlist_m3u(session, playlist)
         content = open(playlist.m3u_path, encoding="utf-8").read()
         assert "Not Yet.mp3" in content
+
+
+def test_regenerate_uses_relative_paths(clean_db, tmp_path):
+    with Session(engine) as session:
+        playlist = Playlist(name="Relative Path Mix")
+        session.add(playlist)
+        session.flush()
+        track_dir = tmp_path / "Real Artist" / "Real Album (2013)"
+        track_dir.mkdir(parents=True)
+        track_file = track_dir / "01 - Real Track.mp3"
+        track_file.write_bytes(b"fake")
+        track = make_track(session, "Real Track", status=TrackStatus.downloaded,
+                           file_path=str(track_file))
+        session.add(PlaylistTrack(playlist_id=playlist.id, track_id=track.id, position=1))
+        session.commit()
+
+        import app.downloader.m3u as m3u_module
+        with patch.object(m3u_module, "music_root", return_value=str(tmp_path)):
+            regenerate_playlist_m3u(session, playlist)
+
+        lines = open(playlist.m3u_path, encoding="utf-8").read().splitlines()
+        path_line = lines[2]
+        assert not os.path.isabs(path_line)
+        resolved = (Path(playlist.m3u_path).parent / path_line).resolve()
+        assert resolved == track_file.resolve()
+
+
+def test_regenerate_relocates_on_folder_setting_change(clean_db, tmp_path):
+    """Batch 8 DoD: changing playlist_output_folder and regenerating an
+    existing playlist writes to the new location, not the old default,
+    and cleans up the stale file."""
+    import app.downloader.m3u as m3u_module
+
+    with Session(engine) as session, patch.object(
+        m3u_module, "music_root", return_value=str(tmp_path)
+    ):
+        playlist = Playlist(name="Relocating Mix")
+        session.add(playlist)
+        session.flush()
+        session.commit()
+
+        regenerate_playlist_m3u(session, playlist)
+        old_path = Path(playlist.m3u_path)
+        assert old_path.parent.name == "Playlists"          # default
+        assert old_path.is_file()
+
+        set_setting("playlist_output_folder", "My Custom Mixes")
+        regenerate_playlist_m3u(session, playlist)
+        new_path = Path(playlist.m3u_path)
+
+        assert new_path.parent.name == "My Custom Mixes"
+        assert new_path.name == old_path.name                # filename unchanged
+        assert new_path.is_file()
+        assert not old_path.exists()                          # stale file cleaned up

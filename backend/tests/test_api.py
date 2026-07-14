@@ -411,6 +411,135 @@ def test_settings_roundtrip_and_validation(clean_db):
     assert client.put("/api/settings", json={}).status_code == 422
 
 
+def test_playlist_output_folder_setting_roundtrip_and_validation(clean_db):
+    assert client.get("/api/settings").json()["playlist_output_folder"] is None
+
+    updated = client.put(
+        "/api/settings", json={"playlist_output_folder": "My Mixes"}
+    ).json()
+    assert updated["playlist_output_folder"] == "My Mixes"
+
+    # Normalizes slashes/whitespace.
+    normalized = client.put(
+        "/api/settings", json={"playlist_output_folder": "  /Nested\\Folder/  "}
+    ).json()
+    assert normalized["playlist_output_folder"] == "Nested/Folder"
+
+    for bad in ["", "   ", "../escape", "a/../b", "/"]:
+        response = client.put("/api/settings", json={"playlist_output_folder": bad})
+        assert response.status_code == 422, f"{bad!r} should have been rejected"
+
+    illegal_chars = client.put(
+        "/api/settings", json={"playlist_output_folder": "Mixes: Vol 1?"}
+    )
+    assert illegal_chars.status_code == 422
+    assert "Mixes- Vol 1-" in illegal_chars.json()["detail"]
+
+    reset = client.put("/api/settings", json={"playlist_output_folder": None}).json()
+    assert reset["playlist_output_folder"] is None
+
+
+def test_musicbrainz_user_agent_applies_to_live_client(clean_db):
+    """MusicBrainz rate-limits by user-agent — a Settings change must take
+    effect immediately, not just on next restart (Batch 8)."""
+    from app.resolver.musicbrainz import DEFAULT_USER_AGENT
+
+    response = client.put("/api/settings", json={"musicbrainz_user_agent": "GrooverrTest/9.9"})
+    assert response.status_code == 200
+    assert runtime.resolver.mb._client.headers["User-Agent"] == "GrooverrTest/9.9"
+
+    # Explicit null resets to the built-in default, live.
+    client.put("/api/settings", json={"musicbrainz_user_agent": None})
+    assert runtime.resolver.mb._client.headers["User-Agent"] == DEFAULT_USER_AGENT
+
+
+VALID_COOKIES_TXT = (
+    "# Netscape HTTP Cookie File\n"
+    ".youtube.com\tTRUE\t/\tTRUE\t2147483647\tCONSENT\tYES+1\n"
+    ".youtube.com\tTRUE\t/\tTRUE\t2147483647\tVISITOR_INFO1_LIVE\tabc123\n"
+)
+
+
+def test_youtube_cookies_upload_status_and_delete(clean_db):
+    assert client.get("/api/settings/youtube-cookies").json() == {
+        "configured": False, "uploaded_at": None,
+    }
+
+    upload = client.post(
+        "/api/settings/youtube-cookies",
+        files={"file": ("cookies.txt", VALID_COOKIES_TXT.encode(), "text/plain")},
+    )
+    assert upload.status_code == 201
+    body = upload.json()
+    assert body["configured"] is True
+    assert body["uploaded_at"] is not None
+
+    status = client.get("/api/settings/youtube-cookies").json()
+    assert status["configured"] is True
+    assert status["uploaded_at"] == body["uploaded_at"]
+
+    deleted = client.delete("/api/settings/youtube-cookies")
+    assert deleted.status_code == 200
+    assert deleted.json() == {"configured": False, "uploaded_at": None}
+    assert client.get("/api/settings/youtube-cookies").json()["configured"] is False
+
+
+def test_youtube_cookies_rejects_bad_uploads(clean_db):
+    empty = client.post(
+        "/api/settings/youtube-cookies", files={"file": ("cookies.txt", b"", "text/plain")}
+    )
+    assert empty.status_code == 422
+
+    not_cookies = client.post(
+        "/api/settings/youtube-cookies",
+        files={"file": ("cookies.txt", b"this is just some random text file", "text/plain")},
+    )
+    assert not_cookies.status_code == 422
+
+    too_big = client.post(
+        "/api/settings/youtube-cookies",
+        files={"file": ("cookies.txt", b"x" * 2_000_000, "text/plain")},
+    )
+    assert too_big.status_code == 422
+
+    binary = client.post(
+        "/api/settings/youtube-cookies",
+        files={"file": ("cookies.txt", bytes([0xFF, 0xFE, 0x00, 0x80]), "application/octet-stream")},
+    )
+    assert binary.status_code == 422
+
+    # None of the rejected uploads should have configured anything.
+    assert client.get("/api/settings/youtube-cookies").json()["configured"] is False
+
+
+def test_preview_path_renders_real_examples(clean_db):
+    response = client.get(
+        "/api/settings/preview-path",
+        params={"template": "{MusicRoot}/{AlbumArtist}/{Album} ({ReleaseYear})/{DiscNumber-}{TrackNumber} - {Title}.{ext}"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["single_disc_example"] == (
+        "/music/Daft Punk/Random Access Memories (2013)/01 - Give Life Back to Music.flac"
+    )
+    assert body["multi_disc_example"] == (
+        "/music/Arcade Fire/Reflektor (2013)/2-03 - Supersymmetry.mp3"
+    )
+
+
+def test_preview_path_uses_saved_setting_when_no_override(clean_db):
+    client.put("/api/settings", json={"output_path_template": "{MusicRoot}/{Artist}/{Title}.{ext}"})
+    body = client.get("/api/settings/preview-path").json()
+    assert body["single_disc_example"] == "/music/Daft Punk/Give Life Back to Music.flac"
+
+
+def test_preview_path_rejects_bad_template(clean_db):
+    response = client.get(
+        "/api/settings/preview-path", params={"template": "{MusicRoot}/{Bogus}.{ext}"}
+    )
+    assert response.status_code == 422
+
+
 # ── Queue enrichment ────────────────────────────────────────────────────────
 
 def test_queue_listing_includes_artist_album_context(clean_db):
