@@ -164,10 +164,10 @@ export function useCancelJob() {
   })
 }
 
-export function useSearch(query) {
+export function useSearch(query, mode = 'all') {
   return useQuery({
-    queryKey: ['search', query],
-    queryFn: () => api.get(`/api/search?q=${encodeURIComponent(query)}`),
+    queryKey: ['search', query, mode],
+    queryFn: () => api.get(`/api/search?q=${encodeURIComponent(query)}&mode=${mode}`),
     enabled: Boolean(query && query.trim()),
     retry: false,
     staleTime: 60_000,
@@ -183,6 +183,43 @@ export function useAddToLibrary() {
       queryClient.invalidateQueries({ queryKey: ['queue'] })
       queryClient.invalidateQueries({ queryKey: ['albums'] })
       queryClient.invalidateQueries({ queryKey: ['playlists'] })
+    },
+  })
+}
+
+// ── Artist Detail (Section 7.1.1) ────────────────────────────────────────
+
+const DISCOGRAPHY_PAGE_SIZE = 24
+
+/** Artist Detail's release grid — browsed by MusicBrainz artist MBID
+ * server-side (never a text search), so paginating here never risks
+ * pulling in tribute/mashup pollution. */
+export function useArtistDiscography(artistId) {
+  return useInfiniteQuery({
+    queryKey: ['artists', artistId, 'discography'],
+    queryFn: ({ pageParam }) =>
+      api.get(`/api/artists/${artistId}/discography?limit=${DISCOGRAPHY_PAGE_SIZE}&offset=${pageParam}`),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) => {
+      const loaded = allPages.reduce((sum, page) => sum + page.items.length, 0)
+      return loaded < lastPage.total ? loaded : undefined
+    },
+    enabled: Boolean(artistId),
+  })
+}
+
+/** "Add entire discography" — a one-time snapshot (Section 3 non-goals,
+ * clarified 2026-07-14), not a standing monitor. Queues everything
+ * MusicBrainz currently returns for the artist, server-side. */
+export function useAddEntireDiscography() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (artistId) => api.post(`/api/artists/${artistId}/discography/add-all`, {}),
+    onSuccess: (_data, artistId) => {
+      queryClient.invalidateQueries({ queryKey: ['artists', artistId, 'discography'] })
+      queryClient.invalidateQueries({ queryKey: ['albums'] })
+      queryClient.invalidateQueries({ queryKey: ['queue'] })
+      queryClient.invalidateQueries({ queryKey: ['stats'] })
     },
   })
 }

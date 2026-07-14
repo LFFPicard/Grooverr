@@ -6,6 +6,13 @@ import { AlbumResultCard } from '../components/AlbumResultCard'
 import { ArtistResultCard } from '../components/ArtistResultCard'
 import { PlaylistResultCard } from '../components/PlaylistResultCard'
 
+const MODES = [
+  { value: 'all', label: 'All' },
+  { value: 'title', label: 'Title' },
+  { value: 'album', label: 'Album' },
+  { value: 'artist', label: 'Artist' },
+]
+
 function ResultSection({ title, count, children }) {
   return (
     <div className="mb-8">
@@ -23,7 +30,7 @@ function Notice({ children, tone = 'faint' }) {
   return <div className={`text-center ${color} text-[0.9rem] py-16`}>{children}</div>
 }
 
-function SearchResults({ data, query }) {
+function SearchResults({ data, query, mode }) {
   if (data.query_type === 'url') {
     const hasResult = data.tracks.length || data.albums.length || data.artists.length || data.playlist
     if (!hasResult) {
@@ -69,7 +76,11 @@ function SearchResults({ data, query }) {
       {data.artists.length > 0 && (
         <ResultSection title="Artists" count={`${data.artists.length} results`}>
           {data.artists.map((a, i) => (
-            <ArtistResultCard key={a.musicbrainz_id || a.youtube_channel_id || `${a.name}-${i}`} artist={a} />
+            <ArtistResultCard
+              key={a.musicbrainz_id || a.youtube_channel_id || `${a.name}-${i}`}
+              artist={a}
+              linkToDetail={mode === 'artist'}
+            />
           ))}
         </ResultSection>
       )}
@@ -80,8 +91,9 @@ function SearchResults({ data, query }) {
 export default function Search() {
   const [params, setParams] = useSearchParams()
   const query = params.get('q') || ''
+  const mode = params.get('mode') || 'all'
   const [input, setInput] = useState(query)
-  const search = useSearch(query)
+  const search = useSearch(query, mode)
 
   // Keep the input in sync when the query changes via the topbar search box.
   useEffect(() => {
@@ -91,14 +103,19 @@ export default function Search() {
   function handleSubmit(event) {
     event.preventDefault()
     const q = input.trim()
-    if (q) setParams({ q })
+    if (q) setParams({ q, mode })
+  }
+
+  function handleModeChange(nextMode) {
+    if (query) setParams({ q: query, mode: nextMode })
+    else setParams({ mode: nextMode })
   }
 
   return (
     <div>
       <form
         onSubmit={handleSubmit}
-        className="flex items-center gap-3 bg-panel border border-border rounded-full px-5 py-3.5 mb-8 shadow-card dark:shadow-card-dark"
+        className="flex items-center gap-3 bg-panel border border-border rounded-full px-5 py-3.5 mb-4 shadow-card dark:shadow-card-dark"
       >
         <span aria-hidden="true" className="text-lg">
           🔍
@@ -115,12 +132,34 @@ export default function Search() {
         </button>
       </form>
 
+      <div className="flex items-center gap-2 mb-8">
+        {MODES.map((m) => (
+          <button
+            key={m.value}
+            type="button"
+            onClick={() => handleModeChange(m.value)}
+            className={`text-[0.82rem] font-medium px-3.5 py-1.5 rounded-full transition-colors ${
+              mode === m.value
+                ? 'text-plum bg-plum-tint font-semibold'
+                : 'text-text-dim bg-panel-sunken border border-border hover:text-text'
+            }`}
+          >
+            {m.label}
+          </button>
+        ))}
+        {mode === 'artist' && (
+          <span className="text-[0.75rem] text-text-faint ml-1">
+            Searches MusicBrainz's artist index directly — click a result for their full discography.
+          </span>
+        )}
+      </div>
+
       {!query && (
         <Notice>Search above to find tracks, albums, artists — or paste a YouTube Music link.</Notice>
       )}
       {query && search.isLoading && <Notice>Searching…</Notice>}
       {query && search.isError && <Notice tone="error">{search.error.message}</Notice>}
-      {query && search.isSuccess && <SearchResults data={search.data} query={query} />}
+      {query && search.isSuccess && <SearchResults data={search.data} query={query} mode={mode} />}
     </div>
   )
 }
