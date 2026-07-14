@@ -50,6 +50,11 @@ class ResolvedAlbum(BaseModel):
     total_tracks: Optional[int] = None
     genre: Optional[str] = None
     musicbrainz_id: Optional[str] = None          # release MBID
+    # Set instead of musicbrainz_id by Artist Detail discography browse
+    # hits (Section 7.1.1) — the canonical member release isn't known yet
+    # (MusicBrainz's browse-by-artist endpoint can't embed it), resolved
+    # lazily at add-time via browse_releases_by_release_group.
+    release_group_id: Optional[str] = None
     musicbrainz_artist_id: Optional[str] = None
     youtube_browse_id: Optional[str] = None
     youtube_playlist_id: Optional[str] = None

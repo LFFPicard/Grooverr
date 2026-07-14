@@ -87,10 +87,16 @@ async def artist_discography(
             album = runtime.resolver.mb.parse_release_group_browse_hit(
                 group, artist_name=artist_name, artist_mbid=mbid
             )
+            # No release id is resolved at browse time (see
+            # browse_release_groups_by_artist's docstring), so "already in
+            # library" is matched by title within this artist — the same
+            # heuristic _find_or_create_album already uses when nothing has
+            # a MusicBrainz id to dedupe on.
             in_library = bool(
-                album.musicbrainz_id
-                and session.exec(
-                    select(Album).where(Album.musicbrainz_id == album.musicbrainz_id)
+                session.exec(
+                    select(Album).where(
+                        Album.artist_id == artist_id, Album.title == album.title
+                    )
                 ).first()
             )
             items.append(
@@ -138,10 +144,9 @@ async def add_entire_discography(
             resolved = runtime.resolver.mb.parse_release_group_browse_hit(
                 group, artist_name=artist_name, artist_mbid=mbid
             )
-            if not resolved.musicbrainz_id:
+            if not resolved.release_group_id:
                 logger.warning(
-                    "Skipping %r in bulk add for %r — release-group has no releases",
-                    resolved.title, artist_name,
+                    "Skipping a release-group with no id in bulk add for %r", artist_name,
                 )
                 continue
             try:

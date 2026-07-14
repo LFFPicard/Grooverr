@@ -271,16 +271,20 @@ class MusicBrainzClient:
         """Section 7.1.1: structured browse of an artist's own release-groups
         by MBID — never a text search, so results are exactly that artist's
         official catalog with no tribute/mashup/same-title-different-artist
-        pollution possible by construction. `inc=releases` embeds each
-        release-group's member releases (id/title/status/date) so the most
-        canonical one (_release_rank) can be picked without an extra
-        rate-limited request per item on every page load."""
+        pollution possible by construction.
+
+        Deliberately doesn't request `inc=releases`: verified live against
+        the real MusicBrainz API that it 400s on this particular browse
+        resource ("releases is not a valid inc parameter for the
+        release-group resource") even though it's valid on a release-group
+        *lookup* — a mocked-transport test alone wouldn't have caught this.
+        The canonical member release is resolved lazily, once, only when an
+        item is actually added (browse_releases_by_release_group below)."""
         params = {
             "artist": artist_mbid,
             "type": "|".join(release_types),
             "limit": limit,
             "offset": offset,
-            "inc": "releases",
         }
         data = await self._get("release-group", params)
         groups = data.get("release-groups")
@@ -289,6 +293,20 @@ class MusicBrainzClient:
             [g for g in groups if isinstance(g, dict)] if isinstance(groups, list) else [],
             count if isinstance(count, int) else 0,
         )
+
+    async def browse_releases_by_release_group(
+        self, release_group_mbid: str, limit: int = 25
+    ) -> list[dict]:
+        """Member releases of one release-group — used to pick the canonical
+        one (via _release_rank) when an Artist Detail discography item is
+        actually added, since browse_release_groups_by_artist can't embed
+        this itself (see its docstring). Still a structured lookup by MBID,
+        never a text search."""
+        data = await self._get(
+            "release", {"release-group": release_group_mbid, "limit": limit}
+        )
+        releases = data.get("releases")
+        return [r for r in releases if isinstance(r, dict)] if isinstance(releases, list) else []
 
     async def search_freetext(
         self,
@@ -439,23 +457,20 @@ class MusicBrainzClient:
         artist_mbid: Optional[str] = None,
     ) -> ResolvedAlbum:
         """One release-group from browse_release_groups_by_artist → a
-        ResolvedAlbum whose musicbrainz_id is the release-group's own most
-        canonical member RELEASE (via _release_rank over the embedded
-        `releases` stubs) — so "Add to library" can reuse the exact same
-        get_release()-based full-track-list resolution path as any other
-        album add, no separate code path needed. total_tracks is left None
-        here (browse doesn't include media/track data); the add flow's
-        get_release() lookup fills it in, same as a search-result album."""
+        ResolvedAlbum carrying the release-group id, not a release id yet —
+        picking the canonical member release requires a separate lookup
+        (browse_release_groups_by_artist can't embed it; see its docstring),
+        so that's deferred to add-time via release_group_id, the same lazy-
+        resolution pattern already used for summary-only search results.
+        total_tracks is left None here (browse has no media/track data);
+        the add flow's later get_release() lookup fills it in."""
         rg_id = release_group.get("id")
-        releases = release_group.get("releases")
-        candidates = [r for r in releases if isinstance(r, dict)] if isinstance(releases, list) else []
-        best_release: dict = max(candidates, key=_release_rank) if candidates else {}
         return ResolvedAlbum(
             title=release_group.get("title") or "",
             artist_name=artist_name,
             album_type=_album_type({"release-group": release_group}),
             release_year=_year_from_date(release_group.get("first-release-date")),
-            musicbrainz_id=best_release.get("id"),
+            release_group_id=rg_id,
             musicbrainz_artist_id=artist_mbid,
             cover_art_url=release_group_cover_art_url(rg_id) if rg_id else None,
             source=MetadataSource.musicbrainz,

@@ -308,24 +308,26 @@ RELEASE_GROUP_HITS = [
         "title": "Hybrid Theory",
         "first-release-date": "2000-10-24",
         "primary-type": "Album",
-        "releases": [
-            {"id": "rel-reissue", "title": "Hybrid Theory", "status": "Official", "date": "2020-10-24"},
-            {"id": "rel-original", "title": "Hybrid Theory", "status": "Official", "date": "2000-10-24"},
-        ],
     },
     {
         "id": "rg-2",
         "title": "One Step Closer",
         "first-release-date": "2000-02-01",
         "primary-type": "Single",
-        "releases": [
-            {"id": "rel-single", "title": "One Step Closer", "status": "Official", "date": "2000-02-01"},
-        ],
     },
+]
+
+RG_1_RELEASES = [
+    {"id": "rel-reissue", "title": "Hybrid Theory", "status": "Official", "date": "2020-10-24"},
+    {"id": "rel-original", "title": "Hybrid Theory", "status": "Official", "date": "2000-10-24"},
 ]
 
 
 async def test_browse_release_groups_by_artist_queries_by_mbid_not_text():
+    """Deliberately does NOT request inc=releases — verified live against
+    the real MusicBrainz API that it 400s on this browse resource even
+    though it's valid on a release-group lookup; a mocked-transport test
+    alone wouldn't have caught that, so this also pins the exact params."""
     seen = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -340,7 +342,7 @@ async def test_browse_release_groups_by_artist_queries_by_mbid_not_text():
     await client.close()
 
     assert seen["params"]["artist"] == "artist-mbid-lp"
-    assert seen["params"]["inc"] == "releases"
+    assert "inc" not in seen["params"]
     assert "query" not in seen["params"]  # structured browse, never a text search
     assert total == 2
     assert len(groups) == 2
@@ -354,18 +356,56 @@ async def test_browse_release_groups_handles_missing_keys():
     assert total == 0
 
 
-def test_parse_release_group_browse_hit_picks_earliest_official_release():
+async def test_browse_releases_by_release_group_queries_by_mbid():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["params"] = dict(request.url.params)
+        return httpx.Response(200, json={"releases": RG_1_RELEASES})
+
+    client = make_client(handler)
+    releases = await client.browse_releases_by_release_group("rg-1")
+    await client.close()
+
+    assert seen["params"]["release-group"] == "rg-1"
+    assert "query" not in seen["params"]
+    assert len(releases) == 2
+
+
+async def test_browse_releases_by_release_group_handles_missing_keys():
+    client = make_client(lambda req: httpx.Response(200, json={}))
+    assert await client.browse_releases_by_release_group("rg-x") == []
+    await client.close()
+
+
+def test_parse_release_group_browse_hit_carries_release_group_id_not_a_release():
+    """No release id is resolved at browse time (MusicBrainz can't embed
+    member releases on this resource) — musicbrainz_id stays unset and
+    release_group_id carries the id instead, resolved lazily at add-time."""
     album = MusicBrainzClient.parse_release_group_browse_hit(
         RELEASE_GROUP_HITS[0], artist_name="Linkin Park", artist_mbid="artist-mbid-lp"
     )
     assert album.title == "Hybrid Theory"
     assert album.artist_name == "Linkin Park"
     assert album.musicbrainz_artist_id == "artist-mbid-lp"
-    assert album.musicbrainz_id == "rel-original"       # earliest official beats the reissue
+    assert album.musicbrainz_id is None
+    assert album.release_group_id == "rg-1"
     assert album.release_year == 2000
     assert album.album_type == "album"
     assert album.cover_art_url == release_group_cover_art_url("rg-1")
     assert album.total_tracks is None                    # filled in later by get_release()
+
+
+def test_release_rank_picks_earliest_official_release_among_release_group_members():
+    """The lazy add-time resolution (app.api.library._resolve_full_album)
+    ranks browse_releases_by_release_group's output with this same
+    _release_rank helper — proven directly here against realistic bare
+    release stubs (no nested release-group/media, unlike a recording hit's
+    releases)."""
+    from app.resolver.musicbrainz import _release_rank
+
+    best = max(RG_1_RELEASES, key=_release_rank)
+    assert best["id"] == "rel-original"
 
 
 def test_parse_release_group_browse_hit_survives_no_releases():

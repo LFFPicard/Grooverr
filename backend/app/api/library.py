@@ -27,6 +27,7 @@ from app.db import engine
 from app.downloader.m3u import regenerate_playlist_m3u
 from app.downloader.ytdlp import SUPPORTED_FORMATS
 from app.models import Album, Artist, Playlist, PlaylistTrack, Track, TrackStatus
+from app.resolver.musicbrainz import _release_rank
 from app.resolver.schemas import ResolvedAlbum, ResolvedTrack
 from app import runtime
 
@@ -278,6 +279,19 @@ async def _resolve_full_album(resolved_album: ResolvedAlbum) -> ResolvedAlbum:
     if resolved_album.musicbrainz_id:
         release = await runtime.resolver.mb.get_release(resolved_album.musicbrainz_id)
         full = runtime.resolver.mb.parse_release(release)
+    elif resolved_album.release_group_id:
+        # Artist Detail discography items (Section 7.1.1) carry a
+        # release-group id, not a release id — the canonical member release
+        # is picked here, lazily, only when the user actually adds it (see
+        # browse_release_groups_by_artist's docstring for why this can't
+        # happen eagerly at browse time).
+        releases = await runtime.resolver.mb.browse_releases_by_release_group(
+            resolved_album.release_group_id
+        )
+        if releases:
+            best = max(releases, key=_release_rank)
+            release = await runtime.resolver.mb.get_release(best["id"])
+            full = runtime.resolver.mb.parse_release(release)
     elif resolved_album.youtube_browse_id or resolved_album.youtube_playlist_id:
         full = await asyncio.to_thread(
             runtime.resolver.yt.get_album,
