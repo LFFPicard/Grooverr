@@ -94,6 +94,11 @@ class Track(SQLModel, table=True):
     status: TrackStatus = Field(default=TrackStatus.missing, index=True)
     audio_source: Optional[AudioSource] = None
     audio_source_url: Optional[str] = None
+    # Extension over the Section 5 field list (flagged in Section 11): the
+    # raw YouTube video id, persisted separately from audio_source_url so
+    # the download pipeline can re-verify it (Section 7.3 mandatory
+    # duration cross-check) rather than re-deriving it by URL-parsing.
+    youtube_video_id: Optional[str] = None
     error_message: Optional[str] = None
     # Extension over the Section 5 field list (flagged in Section 11): whether
     # cover art actually got embedded at download time (Section 6 — art is

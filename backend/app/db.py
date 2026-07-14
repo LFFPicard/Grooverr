@@ -49,6 +49,7 @@ def init_db():
         _ensure_column(connection, "album", "genre", "genre VARCHAR")
         _ensure_column(connection, "queueitem", "requested_format", "requested_format VARCHAR")
         _ensure_column(connection, "track", "has_artwork", "has_artwork BOOLEAN")
+        _ensure_column(connection, "track", "youtube_video_id", "youtube_video_id VARCHAR")
 
 
 def get_session():

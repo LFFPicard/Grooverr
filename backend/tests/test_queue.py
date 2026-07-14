@@ -77,6 +77,7 @@ class FakeDownloader:
             bitrate_kbps=192,
             audio_source="youtube-music",
             audio_source_url="https://music.youtube.com/watch?v=v1",
+            video_id="v1",
             cover_embedded=True,
         )
 
@@ -276,6 +277,67 @@ async def test_resolver_crash_is_not_silently_dropped(clean_db):
         job = session.get(QueueItem, job_id)
         assert job.status == JobStatus.error
         assert "resolver exploded" in job.error_message
+
+
+async def test_retry_reruns_the_same_duration_cross_check(clean_db, tmp_path, monkeypatch):
+    """Section 7.3 / Batch 7 DoD: retrying a track from the Queue must go
+    through the identical duration cross-check as the first attempt, not a
+    separate retry code path that bypasses it. Proven with a real
+    DownloadEngine (not FakeDownloader) wired to a fake YT client whose
+    get_track always returns a mismatching duration — download_audio would
+    raise if the stale id were ever trusted enough to reach it, on either
+    attempt."""
+    import app.downloader.engine as engine_module
+    from app.downloader.engine import DownloadEngine
+    from app.downloader.ytdlp import resolve_ffmpeg_path
+
+    if not resolve_ffmpeg_path():
+        pytest.skip("no ffmpeg available")
+
+    class StaleIdYT:
+        def __init__(self):
+            self.get_track_calls = 0
+
+        def get_track(self, video_id):
+            self.get_track_calls += 1
+            # Wildly mismatching duration — must never be trusted.
+            return ResolvedTrack(title="Wrong Song", youtube_video_id=video_id,
+                                 duration_seconds=9999, source=MetadataSource.youtube_music)
+
+        def search_songs(self, query, limit=10):
+            return []   # fresh-search fallback also finds nothing
+
+        def search_videos(self, query, limit=10):
+            return []
+
+    def unreachable(*args, **kwargs):
+        raise AssertionError("download_audio reached — the stale video id was trusted without cross-check")
+
+    monkeypatch.setattr(engine_module, "download_audio", unreachable)
+
+    fake_yt = StaleIdYT()
+    queue = QueueService()
+    real_engine = DownloadEngine(music_root=str(tmp_path / "music"), ytmusic=fake_yt)
+    resolved_with_stale_id = ResolvedTrack(
+        title="Real Song", artist_name="Real Artist", duration_seconds=200,
+        youtube_video_id="stale-id", musicbrainz_id="rec-1",
+        source=MetadataSource.musicbrainz,
+    )
+    pipeline = Pipeline(queue, resolver=FakeResolver(result=resolved_with_stale_id), downloader=real_engine)
+    track_id, _ = queue.add_track_request("Real Song", artist="Real Artist")
+
+    await run_pool_until(queue, pipeline, lambda: get_track(track_id).status == TrackStatus.error)
+    assert fake_yt.get_track_calls == 1
+    assert get_track(track_id).youtube_video_id == "stale-id"   # never overwritten — no download happened
+
+    with Session(engine) as session:
+        download_job = session.exec(
+            select(QueueItem).where(QueueItem.job_type == JobType.download)
+        ).one()
+    assert queue.retry(download_job.id) is True
+
+    await run_pool_until(queue, pipeline, lambda: fake_yt.get_track_calls == 2)
+    assert get_track(track_id).status == TrackStatus.error   # rejected again, not bypassed
 
 
 async def test_concurrency_limit_respected(clean_db):

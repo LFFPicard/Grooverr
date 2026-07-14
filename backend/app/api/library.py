@@ -254,6 +254,7 @@ def _create_track(session: Session, album: Album, resolved: ResolvedTrack) -> Op
         duration_seconds=resolved.duration_seconds,
         musicbrainz_id=resolved.musicbrainz_id,
         status=TrackStatus.queued,
+        youtube_video_id=resolved.youtube_video_id,
         audio_source_url=(
             f"https://music.youtube.com/watch?v={resolved.youtube_video_id}"
             if resolved.youtube_video_id else None

@@ -45,6 +45,12 @@ class NoSearchYT:
     def search_videos(self, query, limit=10):
         return []
 
+    def get_track(self, video_id):
+        # Section 7.3 cross-check target: track() sets no duration_seconds,
+        # so any candidate with a matching video id passes (see
+        # _best_candidate's "no target duration" leniency).
+        return ResolvedTrack(title="Supersymmetry", youtube_video_id=video_id, source=MetadataSource.youtube_music)
+
 
 async def test_full_pipeline_offline(ffmpeg, tmp_path, monkeypatch):
     def fake_download(video_id, dest_dir, output_format, quality_kbps, ffmpeg_path,
@@ -92,6 +98,37 @@ async def test_no_match_is_a_specific_failure(tmp_path):
     engine = DownloadEngine(music_root=str(tmp_path), ytmusic=NoSearchYT())
     with pytest.raises(DownloadFailure, match="No YouTube Music or YouTube match"):
         await engine.download_track(track(youtube_video_id=None))
+
+
+async def test_stale_video_id_fails_cross_check_falls_back_to_search(ffmpeg, tmp_path, monkeypatch):
+    """Section 7.3 (decision resolved 2026-07-13): a pre-existing video id
+    whose actual duration doesn't match Track.duration_seconds must not be
+    trusted — falls through to a fresh search instead of downloading it."""
+    class MismatchThenMatchYT:
+        def get_track(self, video_id):
+            # The stale id resolves to something real, but way off duration.
+            return ResolvedTrack(title="Wrong Song", youtube_video_id=video_id,
+                                 duration_seconds=50, source=MetadataSource.youtube_music)
+
+        def search_songs(self, query, limit=10):
+            return [ResolvedTrack(title="Supersymmetry", artist_name="Arcade Fire",
+                                  youtube_video_id="freshmatch", duration_seconds=200,
+                                  source=MetadataSource.youtube_music)]
+
+        def search_videos(self, query, limit=10):
+            return []
+
+    monkeypatch.setattr(
+        engine_module, "download_audio",
+        lambda video_id, dest_dir, output_format, quality_kbps, ffmpeg_path, progress_callback=None:
+            make_silent_file(ffmpeg, dest_dir, output_format).rename(dest_dir / f"{video_id}.{output_format}"),
+    )
+    engine = DownloadEngine(music_root=str(tmp_path / "music"), ytmusic=MismatchThenMatchYT())
+    result = await engine.download_track(
+        track(duration_seconds=200, youtube_video_id="stale123"), output_format="mp3"
+    )
+    assert result.video_id == "freshmatch"           # NOT the stale id
+    assert result.audio_source_url.endswith("freshmatch")
 
 
 async def test_ytdlp_failure_surfaces_as_download_failure(tmp_path, monkeypatch):

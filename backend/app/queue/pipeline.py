@@ -111,6 +111,7 @@ class Pipeline:
             track.duration_seconds = resolved.duration_seconds
             track.musicbrainz_id = resolved.musicbrainz_id
             if resolved.youtube_video_id:
+                track.youtube_video_id = resolved.youtube_video_id
                 track.audio_source_url = (
                     f"https://music.youtube.com/watch?v={resolved.youtube_video_id}"
                 )
@@ -159,6 +160,9 @@ class Pipeline:
                 musicbrainz_release_id=album.musicbrainz_id if album else None,
                 musicbrainz_artist_id=artist.musicbrainz_id if artist else None,
                 cover_art_url=album.cover_art_url if album else None,
+                # Fed to the matcher's mandatory duration cross-check
+                # (Section 7.3) — never trusted blindly, just a candidate.
+                youtube_video_id=track.youtube_video_id,
                 source=MetadataSource.musicbrainz if track.musicbrainz_id
                 else MetadataSource.youtube_music,
             )
@@ -206,6 +210,9 @@ class Pipeline:
                 track.bitrate = str(result.bitrate_kbps) if result.bitrate_kbps else None
                 track.audio_source = AudioSource(result.audio_source)
                 track.audio_source_url = result.audio_source_url
+                # May differ from the pre-download value if the cross-check
+                # rejected a stale id and fell through to a fresh match.
+                track.youtube_video_id = result.video_id
                 track.has_artwork = result.cover_embedded
                 track.downloaded_at = datetime.utcnow()
                 track.error_message = None

@@ -39,6 +39,10 @@ class DownloadResult(BaseModel):
     bitrate_kbps: Optional[int] = None
     audio_source: str                      # "youtube-music" | "youtube"
     audio_source_url: str
+    # The video id actually used — may differ from a stale pre-existing id
+    # the caller passed in, if the Section 7.3 duration cross-check
+    # rejected it and fell through to a fresh search match.
+    video_id: str
     cover_embedded: bool
     warnings: list[str] = []
 
@@ -177,6 +181,7 @@ class DownloadEngine:
             bitrate_kbps=bitrate,
             audio_source=match.audio_source,
             audio_source_url=match.url,
+            video_id=match.video_id,
             cover_embedded=cover is not None,
             warnings=warnings,
         )
