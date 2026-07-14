@@ -1,12 +1,13 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { useWindowVirtualizer } from '@tanstack/react-virtual'
-import { useAlbumsInfinite } from '../api/hooks'
+import { useEffect, useMemo, useState } from 'react'
+import { useAlbumsInfinite, usePlaylistsInfinite } from '../api/hooks'
 import { AlbumCard } from '../components/AlbumCard'
-import { PlaylistsPanel } from '../components/PlaylistsPanel'
+import { PlaylistCard } from '../components/PlaylistCard'
+import { VirtualizedCardGrid } from '../components/VirtualizedCardGrid'
 
-const COLUMNS = 5
-const GAP = 18
-const ROW_HEIGHT_ESTIMATE = 340 // px — tuned for a ~250px-wide card; corrected live via measureElement
+const TABS = [
+  { key: 'albums', label: 'Albums' },
+  { key: 'playlists', label: 'Playlists' },
+]
 
 const COMPLETENESS_OPTIONS = [
   { value: '', label: 'All completeness' },
@@ -14,7 +15,7 @@ const COMPLETENESS_OPTIONS = [
   { value: 'incomplete', label: 'Incomplete' },
   { value: 'empty', label: 'Empty' },
 ]
-const FORMAT_OPTIONS = ['', 'mp3', 'flac', 'm4a', 'opus', 'wav', 'ogg']
+const FORMAT_OPTIONS = ['mp3', 'flac', 'm4a', 'opus', 'wav', 'ogg']
 const SORT_OPTIONS = [
   { value: 'title', label: 'Title' },
   { value: 'artist', label: 'Artist' },
@@ -34,7 +35,7 @@ function useDebouncedValue(value, delay = 300) {
 const selectClass =
   'bg-panel-sunken border border-border rounded-full px-3.5 py-2 text-[0.82rem] text-text outline-none'
 
-export default function Library() {
+function AlbumsTab() {
   const [searchInput, setSearchInput] = useState('')
   const [completeness, setCompleteness] = useState('')
   const [format, setFormat] = useState('')
@@ -49,36 +50,6 @@ export default function Library() {
   const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading, isError } = useAlbumsInfinite(filters)
   const albums = useMemo(() => data?.pages.flatMap((page) => page.items) ?? [], [data])
   const total = data?.pages[0]?.total
-
-  const rows = useMemo(() => {
-    const chunked = []
-    for (let i = 0; i < albums.length; i += COLUMNS) chunked.push(albums.slice(i, i + COLUMNS))
-    return chunked
-  }, [albums])
-
-  const containerRef = useRef(null)
-  const [scrollMargin, setScrollMargin] = useState(0)
-  useLayoutEffect(() => {
-    if (containerRef.current) setScrollMargin(containerRef.current.offsetTop)
-  }, [rows.length === 0])
-
-  const virtualizer = useWindowVirtualizer({
-    count: hasNextPage ? rows.length + 1 : rows.length,
-    estimateSize: () => ROW_HEIGHT_ESTIMATE,
-    overscan: 3,
-    gap: GAP,
-    scrollMargin,
-  })
-
-  const virtualItems = virtualizer.getVirtualItems()
-
-  useEffect(() => {
-    const last = virtualItems[virtualItems.length - 1]
-    if (!last) return
-    if (last.index >= rows.length - 1 && hasNextPage && !isFetchingNextPage) {
-      fetchNextPage()
-    }
-  }, [virtualItems, rows.length, hasNextPage, isFetchingNextPage, fetchNextPage])
 
   return (
     <div>
@@ -98,7 +69,7 @@ export default function Library() {
         </select>
         <select value={format} onChange={(e) => setFormat(e.target.value)} className={selectClass}>
           <option value="">All formats</option>
-          {FORMAT_OPTIONS.filter(Boolean).map((f) => (
+          {FORMAT_OPTIONS.map((f) => (
             <option key={f} value={f}>
               {f.toUpperCase()}
             </option>
@@ -116,58 +87,70 @@ export default function Library() {
         )}
       </div>
 
-      {isLoading ? (
-        <div className="text-center text-text-faint text-[0.9rem] py-16">Loading…</div>
-      ) : isError ? (
-        <div className="text-center text-danger text-[0.9rem] py-16">Could not load the library.</div>
-      ) : albums.length === 0 ? (
-        <div className="bg-panel border border-border rounded-card px-6 py-16 text-center text-text-faint text-[0.9rem]">
-          No albums match these filters.
-        </div>
-      ) : (
-        <div ref={containerRef} style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
-          {virtualItems.map((virtualRow) => {
-            const row = rows[virtualRow.index]
-            const style = {
-              position: 'absolute',
-              top: 0,
-              left: 0,
-              width: '100%',
-              transform: `translateY(${virtualRow.start - scrollMargin}px)`,
-            }
-            if (!row) {
-              return (
-                <div
-                  key={virtualRow.key}
-                  ref={virtualizer.measureElement}
-                  data-index={virtualRow.index}
-                  style={style}
-                  className="text-center text-text-faint text-[0.8rem] py-6"
-                >
-                  Loading more…
-                </div>
-              )
-            }
-            return (
-              <div
-                key={virtualRow.key}
-                ref={virtualizer.measureElement}
-                data-index={virtualRow.index}
-                style={style}
-                className="grid grid-cols-5 gap-[18px]"
-              >
-                {row.map((album) => (
-                  <AlbumCard key={album.id} album={album} />
-                ))}
-              </div>
-            )
-          })}
+      <VirtualizedCardGrid
+        items={albums}
+        isLoading={isLoading}
+        isError={isError}
+        hasNextPage={hasNextPage}
+        isFetchingNextPage={isFetchingNextPage}
+        fetchNextPage={fetchNextPage}
+        renderCard={(album) => <AlbumCard key={album.id} album={album} />}
+        emptyMessage="No albums match these filters."
+        errorMessage="Could not load the library."
+      />
+    </div>
+  )
+}
+
+function PlaylistsTab() {
+  const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading, isError } = usePlaylistsInfinite()
+  const playlists = useMemo(() => data?.pages.flatMap((page) => page.items) ?? [], [data])
+  const total = data?.pages[0]?.total
+
+  return (
+    <div>
+      {typeof total === 'number' && total > 0 && (
+        <div className="flex items-center mb-6">
+          <span className="text-[0.8rem] text-text-faint ml-auto font-mono">{total} playlists</span>
         </div>
       )}
+      <VirtualizedCardGrid
+        items={playlists}
+        isLoading={isLoading}
+        isError={isError}
+        hasNextPage={hasNextPage}
+        isFetchingNextPage={isFetchingNextPage}
+        fetchNextPage={fetchNextPage}
+        renderCard={(playlist) => <PlaylistCard key={playlist.id} playlist={playlist} />}
+        emptyMessage="No playlists yet — paste a YouTube Music playlist link in Search to add one."
+        errorMessage="Could not load playlists."
+      />
+    </div>
+  )
+}
 
-      <div className="mt-10">
-        <PlaylistsPanel />
+export default function Library() {
+  const [tab, setTab] = useState('albums')
+
+  return (
+    <div>
+      <div className="flex items-center gap-2 mb-6">
+        {TABS.map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setTab(t.key)}
+            className={`text-[0.85rem] font-medium px-4 py-2 rounded-full transition-colors ${
+              tab === t.key
+                ? 'text-plum bg-plum-tint font-semibold'
+                : 'text-text-dim bg-panel-sunken border border-border hover:text-text'
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
       </div>
+
+      {tab === 'albums' ? <AlbumsTab /> : <PlaylistsTab />}
     </div>
   )
 }

@@ -2,6 +2,7 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import { api } from './client'
 
 const ALBUMS_PAGE_SIZE = 60
+const PLAYLISTS_PAGE_SIZE = 60
 const QUEUE_TAB_PAGE_SIZE = 20
 
 export function useStats() {
@@ -79,10 +80,18 @@ export function useAlbumDetail(albumId) {
   })
 }
 
-export function usePlaylists(limit = 50) {
-  return useQuery({
-    queryKey: ['playlists', 'list', limit],
-    queryFn: () => api.get(`/api/library/playlists?limit=${limit}`),
+/** Playlists tab data source — same windowed-grid treatment as Albums
+ * (Section 8, decision resolved 2026-07-13: shared VirtualizedCardGrid). */
+export function usePlaylistsInfinite() {
+  return useInfiniteQuery({
+    queryKey: ['playlists', 'list'],
+    queryFn: ({ pageParam }) =>
+      api.get(`/api/library/playlists?limit=${PLAYLISTS_PAGE_SIZE}&offset=${pageParam}`),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) => {
+      const loaded = allPages.reduce((sum, page) => sum + page.items.length, 0)
+      return loaded < lastPage.total ? loaded : undefined
+    },
   })
 }
 
@@ -173,6 +182,7 @@ export function useAddToLibrary() {
       queryClient.invalidateQueries({ queryKey: ['stats'] })
       queryClient.invalidateQueries({ queryKey: ['queue'] })
       queryClient.invalidateQueries({ queryKey: ['albums'] })
+      queryClient.invalidateQueries({ queryKey: ['playlists'] })
     },
   })
 }
