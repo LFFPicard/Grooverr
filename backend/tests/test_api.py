@@ -311,6 +311,9 @@ class FakeSearchResolver:
                 return [RECORDING_HIT]
             return []
 
+        async def search_artists(self, name, limit=10):
+            return []  # empty → falls through to freetext, then YT fallback
+
         from app.resolver.musicbrainz import MusicBrainzClient as _C
         parse_recording_hit = staticmethod(_C.parse_recording_hit)
         parse_release = staticmethod(_C.parse_release)
@@ -346,6 +349,76 @@ def test_text_search_mb_first_ytm_fallback_per_category(clean_db, fake_resolver)
     assert body["tracks"][0]["musicbrainz_id"] == "rec-mbid-1"   # from MB
     assert body["albums"][0]["title"] == "YT Album"              # YTM fallback
     assert body["artists"][0]["name"] == "YT Artist"             # YTM fallback
+
+
+def test_search_mode_title_only_populates_tracks(clean_db, fake_resolver):
+    body = client.get("/api/search", params={"q": "give life back to music", "mode": "title"}).json()
+    assert body["mode"] == "title"
+    assert body["tracks"][0]["musicbrainz_id"] == "rec-mbid-1"
+    assert body["albums"] == []
+    assert body["artists"] == []
+
+
+def test_search_mode_album_only_populates_albums(clean_db, fake_resolver):
+    body = client.get("/api/search", params={"q": "anything", "mode": "album"}).json()
+    assert body["mode"] == "album"
+    assert body["tracks"] == []
+    assert body["albums"][0]["title"] == "YT Album"  # MB empty here → YTM fallback
+    assert body["artists"] == []
+
+
+def test_search_mode_artist_only_populates_artists(clean_db, fake_resolver):
+    body = client.get("/api/search", params={"q": "linkin park", "mode": "artist"}).json()
+    assert body["mode"] == "artist"
+    assert body["tracks"] == []
+    assert body["albums"] == []
+    assert body["artists"][0]["name"] == "YT Artist"  # MB empty here → YTM fallback
+
+
+def test_search_mode_artist_queries_artist_index_directly():
+    """mode=artist (and mode=all) must call search_artists (a phrase-quoted
+    name search against the artist index) before falling back to a freetext
+    search — the whole point is that tribute/mashup titles containing the
+    artist's name cannot pollute an artist-index query (Section 7.1.1)."""
+    calls = []
+
+    class MB:
+        async def search_artists(self, name, limit=10):
+            calls.append(("search_artists", name))
+            return [{"id": "artist-mbid-lp", "name": "Linkin Park", "score": 100}]
+
+        async def search_freetext(self, entity, q, limit=5, extra_terms=None):
+            calls.append((f"search_freetext:{entity}", q))
+            return []
+
+        from app.resolver.musicbrainz import MusicBrainzClient as _C
+        parse_artist_hit = staticmethod(_C.parse_artist_hit)
+
+    class Resolver:
+        def __init__(self):
+            self.mb = MB()
+            self.yt = FakeSearchResolver._YT()
+
+        async def resolve_url(self, url):
+            return None
+
+    import app.runtime as rt
+    original = rt.resolver
+    rt.resolver = Resolver()
+    try:
+        body = client.get("/api/search", params={"q": "linkin park", "mode": "artist"}).json()
+    finally:
+        rt.resolver = original
+
+    assert body["artists"][0]["name"] == "Linkin Park"
+    assert ("search_artists", "linkin park") in calls
+    assert not any(call[0] == "search_freetext:artist" for call in calls)  # not needed — MB hit
+
+
+def test_default_mode_is_all(clean_db, fake_resolver):
+    body = client.get("/api/search", params={"q": "give life back to music"}).json()
+    assert body["mode"] == "all"
+    assert body["tracks"] and body["albums"] and body["artists"]
 
 
 def test_url_search_detects_and_resolves(clean_db, fake_resolver):

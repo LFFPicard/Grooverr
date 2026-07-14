@@ -67,7 +67,20 @@ def _rerank(query: str, candidates: list, variants_of) -> list:
 
 
 @router.get("", response_model=SearchResponse)
-async def search(q: str = Query(min_length=1, max_length=500)):
+async def search(
+    q: str = Query(min_length=1, max_length=500),
+    mode: str = Query(
+        default="all",
+        pattern="^(all|title|album|artist)$",
+        description=(
+            "Scopes what's actually queried (Section 7.1, added 2026-07-14). "
+            "'artist' queries MusicBrainz's artist index directly (a name "
+            "search, not a recording/title search) — tribute tracks and "
+            "mashups by unrelated artists cannot appear in artist-index "
+            "results at all, regardless of what their titles contain."
+        ),
+    ),
+):
     parsed = parse_music_url(q)
     if parsed is not None:
         result = await runtime.resolver.resolve_url(q)
@@ -86,55 +99,66 @@ async def search(q: str = Query(min_length=1, max_length=500)):
             response.playlist = result
         return response
 
-    response = SearchResponse(query=q, query_type="text")
+    response = SearchResponse(query=q, query_type="text", mode=mode)
     mb = runtime.resolver.mb
     yt = runtime.resolver.yt
 
-    # MusicBrainz first (Section 7.1 step 3). Freetext (unfielded) queries —
-    # users type "title artist" into one box, which a phrase-quoted field
-    # query can never match. Studio-first pass for recordings, same
-    # reasoning as the resolver's two-pass search.
-    try:
-        hits = await mb.search_freetext(
-            "recording", q, FETCH_PER_CATEGORY,
-            extra_terms="status:official AND primarytype:album AND NOT secondarytype:live",
-        )
-        if not hits:
-            hits = await mb.search_freetext("recording", q, FETCH_PER_CATEGORY)
-        tracks = [mb.parse_recording_hit(h) for h in hits if isinstance(h, dict)]
-        response.tracks = _rerank(
-            q, tracks,
-            lambda t: [(t.title, t.artist_name), (t.title, t.album_artist)],
-        )
-    except Exception:
-        logger.exception("MusicBrainz recording search failed for %r", q)
-    try:
-        release_hits = await mb.search_freetext("release", q, FETCH_PER_CATEGORY)
-        albums = [mb.parse_release(h) for h in release_hits if isinstance(h, dict)]
-        response.albums = _rerank(q, albums, lambda a: [(a.title, a.artist_name)])
-    except Exception:
-        logger.exception("MusicBrainz release search failed for %r", q)
-    try:
-        artist_hits = await mb.search_freetext("artist", q, FETCH_PER_CATEGORY)
-        artists = [mb.parse_artist_hit(h) for h in artist_hits if isinstance(h, dict)]
-        response.artists = _rerank(q, artists, lambda a: [(a.name,)])
-    except Exception:
-        logger.exception("MusicBrainz artist search failed for %r", q)
+    # MusicBrainz first (Section 7.1 step 3), scoped to whichever category
+    # mode asks for ("all" runs every category, same as before the selector
+    # existed). Freetext (unfielded) queries — users type "title artist"
+    # into one box, which a phrase-quoted field query can never match.
+    # Studio-first pass for recordings, same reasoning as the resolver's
+    # two-pass search.
+    if mode in ("all", "title"):
+        try:
+            hits = await mb.search_freetext(
+                "recording", q, FETCH_PER_CATEGORY,
+                extra_terms="status:official AND primarytype:album AND NOT secondarytype:live",
+            )
+            if not hits:
+                hits = await mb.search_freetext("recording", q, FETCH_PER_CATEGORY)
+            tracks = [mb.parse_recording_hit(h) for h in hits if isinstance(h, dict)]
+            response.tracks = _rerank(
+                q, tracks,
+                lambda t: [(t.title, t.artist_name), (t.title, t.album_artist)],
+            )
+        except Exception:
+            logger.exception("MusicBrainz recording search failed for %r", q)
+        if not response.tracks:
+            try:
+                response.tracks = await asyncio.to_thread(yt.search_songs, q, RESULTS_PER_CATEGORY)
+            except Exception:
+                logger.exception("YouTube Music song search failed for %r", q)
 
-    # YouTube Music fallback per empty category.
-    if not response.tracks:
+    if mode in ("all", "album"):
         try:
-            response.tracks = await asyncio.to_thread(yt.search_songs, q, RESULTS_PER_CATEGORY)
+            release_hits = await mb.search_freetext("release", q, FETCH_PER_CATEGORY)
+            albums = [mb.parse_release(h) for h in release_hits if isinstance(h, dict)]
+            response.albums = _rerank(q, albums, lambda a: [(a.title, a.artist_name)])
         except Exception:
-            logger.exception("YouTube Music song search failed for %r", q)
-    if not response.albums:
+            logger.exception("MusicBrainz release search failed for %r", q)
+        if not response.albums:
+            try:
+                response.albums = await asyncio.to_thread(yt.search_albums, q, RESULTS_PER_CATEGORY)
+            except Exception:
+                logger.exception("YouTube Music album search failed for %r", q)
+
+    if mode in ("all", "artist"):
+        # Artist-index name search (not a title/recording search) — this is
+        # the structural fix (Section 7.1.1): tribute tracks and mashups by
+        # unrelated artists cannot appear here regardless of title contents.
         try:
-            response.albums = await asyncio.to_thread(yt.search_albums, q, RESULTS_PER_CATEGORY)
+            artist_hits = await mb.search_artists(q, limit=FETCH_PER_CATEGORY)
+            if not artist_hits:
+                artist_hits = await mb.search_freetext("artist", q, FETCH_PER_CATEGORY)
+            artists = [mb.parse_artist_hit(h) for h in artist_hits if isinstance(h, dict)]
+            response.artists = _rerank(q, artists, lambda a: [(a.name,)])
         except Exception:
-            logger.exception("YouTube Music album search failed for %r", q)
-    if not response.artists:
-        try:
-            response.artists = await asyncio.to_thread(yt.search_artists, q, RESULTS_PER_CATEGORY)
-        except Exception:
-            logger.exception("YouTube Music artist search failed for %r", q)
+            logger.exception("MusicBrainz artist search failed for %r", q)
+        if not response.artists:
+            try:
+                response.artists = await asyncio.to_thread(yt.search_artists, q, RESULTS_PER_CATEGORY)
+            except Exception:
+                logger.exception("YouTube Music artist search failed for %r", q)
+
     return response
