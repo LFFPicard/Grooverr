@@ -76,12 +76,34 @@ class ArtistOut(BaseModel):
     album_count: int = 0
 
 
+# ── Artist Detail (Section 7.1.1) ───────────────────────────────────────────
+
+class ArtistDiscographyItem(BaseModel):
+    """One release-group from the artist's MusicBrainz-browsed catalog. The
+    embedded `album` is a ResolvedAlbum ready to hand straight to POST
+    /api/library/add (type=album) unchanged — its musicbrainz_id is already
+    the release-group's own canonical member release."""
+    release_group_id: str
+    album: ResolvedAlbum
+    in_library: bool = False
+
+
+class DiscographyAddAllResponse(BaseModel):
+    """Bulk 'Add entire discography' result — a one-time snapshot, not a
+    standing monitor (Section 3 non-goals, clarified 2026-07-14)."""
+    artist_id: str
+    albums_added: int = 0
+    queued_jobs: int = 0
+    already_in_library: int = 0
+
+
 # ── Search / add ───────────────────────────────────────────────────────────
 
 class SearchResponse(BaseModel):
     query: str
     query_type: str                          # "url" | "text"
     url_type: Optional[str] = None           # track|album|artist|playlist when url
+    mode: str = "all"                        # "all" | "title" | "album" | "artist"
     tracks: list[ResolvedTrack] = []
     albums: list[ResolvedAlbum] = []
     artists: list[ResolvedArtist] = []

@@ -5,6 +5,7 @@ The album grid is a single aggregated query (join + GROUP BY, no N+1):
 summary data only — the track list lives behind the separate, cheap album
 detail endpoint. Everything is paginated with server-side filtering.
 """
+import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -266,6 +267,68 @@ def _create_track(session: Session, album: Album, resolved: ResolvedTrack) -> Op
     return track
 
 
+async def _resolve_full_album(resolved_album: ResolvedAlbum) -> ResolvedAlbum:
+    """Fills in the track list for a summary-only ResolvedAlbum (search
+    results and Artist Detail discography hits both carry no track list) via
+    a single get_release/get_album lookup — shared by the single-album add
+    path and the Artist Detail bulk "add entire discography" path."""
+    if resolved_album.tracks:
+        return resolved_album
+    full = None
+    if resolved_album.musicbrainz_id:
+        release = await runtime.resolver.mb.get_release(resolved_album.musicbrainz_id)
+        full = runtime.resolver.mb.parse_release(release)
+    elif resolved_album.youtube_browse_id or resolved_album.youtube_playlist_id:
+        full = await asyncio.to_thread(
+            runtime.resolver.yt.get_album,
+            resolved_album.youtube_browse_id or resolved_album.youtube_playlist_id,
+        )
+    if full is None or not full.tracks:
+        raise HTTPException(502, "Could not resolve the album's track list")
+    full.cover_art_url = full.cover_art_url or resolved_album.cover_art_url
+    return full
+
+
+def _persist_album(session: Session, resolved_album: ResolvedAlbum) -> tuple[Album, list[str], int]:
+    """Dedup artist/album/tracks and persist — does not commit or enqueue."""
+    artist = _find_or_create_artist(
+        session, resolved_album.artist_name, resolved_album.musicbrainz_artist_id
+    )
+    album = _find_or_create_album(session, artist, resolved_album)
+    new_track_ids = []
+    already_in_library = 0
+    for resolved_track in resolved_album.tracks:
+        track = _create_track(session, album, resolved_track)
+        if track is None:
+            already_in_library += 1
+        else:
+            new_track_ids.append(track.id)
+    return album, new_track_ids, already_in_library
+
+
+async def _add_album(
+    resolved_album: ResolvedAlbum,
+    quality: Optional[str] = None,
+    output_format: Optional[str] = None,
+) -> AddToLibraryResponse:
+    """The full "add an album" operation: resolve → dedup/persist → enqueue
+    downloads. Shared by POST /add (type=album) and Artist Detail's bulk
+    add-all (Section 7.1.1), so both go through identical, once-tested logic."""
+    resolved_album = await _resolve_full_album(resolved_album)
+    with Session(engine) as session:
+        album, new_track_ids, already_in_library = _persist_album(session, resolved_album)
+        session.commit()
+        album_id = album.id
+    for track_id in new_track_ids:
+        runtime.queue_service.enqueue_download(track_id, quality=quality, output_format=output_format)
+    return AddToLibraryResponse(
+        added_album_id=album_id,
+        added_track_ids=new_track_ids,
+        queued_jobs=len(new_track_ids),
+        already_in_library=already_in_library,
+    )
+
+
 @router.post("/add", response_model=AddToLibraryResponse, status_code=202)
 async def add_to_library(body: AddToLibraryRequest):
     if body.output_format and body.output_format not in SUPPORTED_FORMATS:
@@ -319,46 +382,9 @@ async def add_to_library(body: AddToLibraryRequest):
     if body.type == "album":
         if body.album is None:
             raise HTTPException(422, "type=album requires an 'album' object")
-        resolved_album = body.album
-        # Search summaries carry no track list — resolve it in one pass
-        # (Section 7.1 step 5: per-album resolution where supported).
-        if not resolved_album.tracks:
-            full = None
-            if resolved_album.musicbrainz_id:
-                release = await runtime.resolver.mb.get_release(resolved_album.musicbrainz_id)
-                full = runtime.resolver.mb.parse_release(release)
-            elif resolved_album.youtube_browse_id or resolved_album.youtube_playlist_id:
-                import asyncio
-                full = await asyncio.to_thread(
-                    runtime.resolver.yt.get_album,
-                    resolved_album.youtube_browse_id or resolved_album.youtube_playlist_id,
-                )
-            if full is None or not full.tracks:
-                raise HTTPException(502, "Could not resolve the album's track list")
-            full.cover_art_url = full.cover_art_url or resolved_album.cover_art_url
-            resolved_album = full
-
-        with Session(engine) as session:
-            artist = _find_or_create_artist(
-                session, resolved_album.artist_name, resolved_album.musicbrainz_artist_id
-            )
-            album = _find_or_create_album(session, artist, resolved_album)
-            new_tracks = []
-            for resolved_track in resolved_album.tracks:
-                track = _create_track(session, album, resolved_track)
-                if track is None:
-                    response.already_in_library += 1
-                else:
-                    new_tracks.append(track.id)
-            session.commit()
-            response.added_album_id = album.id
-            response.added_track_ids = new_tracks
-        for track_id in response.added_track_ids:
-            runtime.queue_service.enqueue_download(
-                track_id, quality=quality, output_format=body.output_format
-            )
-        response.queued_jobs = len(response.added_track_ids)
-        return response
+        # Search summaries carry no track list — _add_album resolves it in
+        # one pass (Section 7.1 step 5: per-album resolution where supported).
+        return await _add_album(body.album, quality=quality, output_format=body.output_format)
 
     if body.type == "artist":
         if body.artist is None:

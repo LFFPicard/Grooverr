@@ -9,7 +9,12 @@ import time
 import httpx
 import pytest
 
-from app.resolver.musicbrainz import MusicBrainzClient, cover_art_url, _lucene_escape
+from app.resolver.musicbrainz import (
+    MusicBrainzClient,
+    cover_art_url,
+    release_group_cover_art_url,
+    _lucene_escape,
+)
 from app.resolver.schemas import MetadataSource
 
 RECORDING_HIT = {
@@ -293,6 +298,80 @@ def test_parse_artist_hit():
 def test_lucene_escape():
     assert _lucene_escape('say "hello"') == 'say \\"hello\\"'
     assert _lucene_escape("back\\slash") == "back\\\\slash"
+
+
+# ── Discography browse (Section 7.1.1) ──────────────────────────────────────
+
+RELEASE_GROUP_HITS = [
+    {
+        "id": "rg-1",
+        "title": "Hybrid Theory",
+        "first-release-date": "2000-10-24",
+        "primary-type": "Album",
+        "releases": [
+            {"id": "rel-reissue", "title": "Hybrid Theory", "status": "Official", "date": "2020-10-24"},
+            {"id": "rel-original", "title": "Hybrid Theory", "status": "Official", "date": "2000-10-24"},
+        ],
+    },
+    {
+        "id": "rg-2",
+        "title": "One Step Closer",
+        "first-release-date": "2000-02-01",
+        "primary-type": "Single",
+        "releases": [
+            {"id": "rel-single", "title": "One Step Closer", "status": "Official", "date": "2000-02-01"},
+        ],
+    },
+]
+
+
+async def test_browse_release_groups_by_artist_queries_by_mbid_not_text():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["params"] = dict(request.url.params)
+        return httpx.Response(
+            200, json={"release-groups": RELEASE_GROUP_HITS, "release-group-count": 2}
+        )
+
+    client = make_client(handler)
+    groups, total = await client.browse_release_groups_by_artist("artist-mbid-lp", limit=25, offset=0)
+    await client.close()
+
+    assert seen["params"]["artist"] == "artist-mbid-lp"
+    assert seen["params"]["inc"] == "releases"
+    assert "query" not in seen["params"]  # structured browse, never a text search
+    assert total == 2
+    assert len(groups) == 2
+
+
+async def test_browse_release_groups_handles_missing_keys():
+    client = make_client(lambda req: httpx.Response(200, json={}))
+    groups, total = await client.browse_release_groups_by_artist("artist-mbid")
+    await client.close()
+    assert groups == []
+    assert total == 0
+
+
+def test_parse_release_group_browse_hit_picks_earliest_official_release():
+    album = MusicBrainzClient.parse_release_group_browse_hit(
+        RELEASE_GROUP_HITS[0], artist_name="Linkin Park", artist_mbid="artist-mbid-lp"
+    )
+    assert album.title == "Hybrid Theory"
+    assert album.artist_name == "Linkin Park"
+    assert album.musicbrainz_artist_id == "artist-mbid-lp"
+    assert album.musicbrainz_id == "rel-original"       # earliest official beats the reissue
+    assert album.release_year == 2000
+    assert album.album_type == "album"
+    assert album.cover_art_url == release_group_cover_art_url("rg-1")
+    assert album.total_tracks is None                    # filled in later by get_release()
+
+
+def test_parse_release_group_browse_hit_survives_no_releases():
+    album = MusicBrainzClient.parse_release_group_browse_hit({"id": "rg-x", "title": "Unreleased"})
+    assert album.title == "Unreleased"
+    assert album.musicbrainz_id is None
 
 
 async def test_search_freetext_strips_lucene_operators():

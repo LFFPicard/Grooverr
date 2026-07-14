@@ -166,6 +166,13 @@ def cover_art_url(release_mbid: str, size: int = 500) -> str:
     return f"{COVER_ART_ROOT}/release/{release_mbid}/front-{size}"
 
 
+def release_group_cover_art_url(release_group_mbid: str, size: int = 500) -> str:
+    """Cover Art Archive redirects release-group front-image requests to
+    whichever member release it has art for — used for discography browse
+    results (Section 7.1.1), which have no single release picked yet."""
+    return f"{COVER_ART_ROOT}/release-group/{release_group_mbid}/front-{size}"
+
+
 class MusicBrainzClient:
     def __init__(
         self,
@@ -251,6 +258,37 @@ class MusicBrainzClient:
         )
         artists = data.get("artists")
         return artists if isinstance(artists, list) else []
+
+    # ── Browse (structured lookup by known entity, not a text search) ─────
+
+    async def browse_release_groups_by_artist(
+        self,
+        artist_mbid: str,
+        release_types: tuple[str, ...] = ("album", "single", "ep"),
+        limit: int = 25,
+        offset: int = 0,
+    ) -> tuple[list[dict], int]:
+        """Section 7.1.1: structured browse of an artist's own release-groups
+        by MBID — never a text search, so results are exactly that artist's
+        official catalog with no tribute/mashup/same-title-different-artist
+        pollution possible by construction. `inc=releases` embeds each
+        release-group's member releases (id/title/status/date) so the most
+        canonical one (_release_rank) can be picked without an extra
+        rate-limited request per item on every page load."""
+        params = {
+            "artist": artist_mbid,
+            "type": "|".join(release_types),
+            "limit": limit,
+            "offset": offset,
+            "inc": "releases",
+        }
+        data = await self._get("release-group", params)
+        groups = data.get("release-groups")
+        count = data.get("release-group-count")
+        return (
+            [g for g in groups if isinstance(g, dict)] if isinstance(groups, list) else [],
+            count if isinstance(count, int) else 0,
+        )
 
     async def search_freetext(
         self,
@@ -391,6 +429,35 @@ class MusicBrainzClient:
             musicbrainz_artist_id=_artist_credit_mbid(release),
             cover_art_url=cover_art_url(release_id) if release_id else None,
             tracks=tracks,
+            source=MetadataSource.musicbrainz,
+        )
+
+    @staticmethod
+    def parse_release_group_browse_hit(
+        release_group: dict,
+        artist_name: Optional[str] = None,
+        artist_mbid: Optional[str] = None,
+    ) -> ResolvedAlbum:
+        """One release-group from browse_release_groups_by_artist → a
+        ResolvedAlbum whose musicbrainz_id is the release-group's own most
+        canonical member RELEASE (via _release_rank over the embedded
+        `releases` stubs) — so "Add to library" can reuse the exact same
+        get_release()-based full-track-list resolution path as any other
+        album add, no separate code path needed. total_tracks is left None
+        here (browse doesn't include media/track data); the add flow's
+        get_release() lookup fills it in, same as a search-result album."""
+        rg_id = release_group.get("id")
+        releases = release_group.get("releases")
+        candidates = [r for r in releases if isinstance(r, dict)] if isinstance(releases, list) else []
+        best_release: dict = max(candidates, key=_release_rank) if candidates else {}
+        return ResolvedAlbum(
+            title=release_group.get("title") or "",
+            artist_name=artist_name,
+            album_type=_album_type({"release-group": release_group}),
+            release_year=_year_from_date(release_group.get("first-release-date")),
+            musicbrainz_id=best_release.get("id"),
+            musicbrainz_artist_id=artist_mbid,
+            cover_art_url=release_group_cover_art_url(rg_id) if rg_id else None,
             source=MetadataSource.musicbrainz,
         )
 
