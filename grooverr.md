@@ -157,8 +157,8 @@ Playlist
   source (youtube-music)
   source_url
   source_playlist_id
-  m3u_path (nullable)          -- absolute path to the generated .m3u8 manifest
-  m3u_generated_at (nullable)  -- last time the manifest was regenerated
+  m3u_path (nullable)      -- path to the generated .m3u8 file, null until first generated
+  m3u_generated_at (nullable)
   created_at
 
 PlaylistTrack
@@ -202,16 +202,32 @@ Rules:
 - Embedded cover art is **attempted on every file** (pulled from the metadata source, highest resolution available). **Decision (resolved 2026-07-12):** if no art is available (e.g. Cover Art Archive has no image for a release), the download proceeds without it — logged as a warning, not a failure. A track with correct audio and tags but no artwork is a better outcome than a failed download; Picard itself doesn't fail on missing art either. Missing-art tracks should be visually flagged in the Library UI (Batch 7) so the user can spot and manually fix them if they care to, but this never blocks the pipeline.
 - ID3/Vorbis tags written: title, artist, album artist, album, track number, disc number, year, genre (if available), MusicBrainz track/release/artist IDs (as custom tags — this is what makes it Picard-compatible for future re-tagging)
 
-### 6.1 Playlist output (M3U8 manifests, never duplicated audio) — decision resolved 2026-07-14
+### 6.1 Playlists on disk — no audio duplication (decision resolved 2026-07-13)
 
-Playlists do not produce their own copy of the audio. Every track belonging to a playlist is downloaded once, tagged, and placed at its normal path above exactly as if it had been added as a standalone track or as part of an album — the playlist relationship is tracked purely via the `PlaylistTrack` join table (Section 5).
+A track added via a playlist import goes through the **exact same pipeline and lands at the exact same path** as if it had been added via album or artist search — there is only ever one physical copy of a given track's audio file, regardless of how many playlists reference it or whether it's also part of a "properly" downloaded album. This matters for two reasons: duplicating audio per-playlist would multiply storage for every popular track, and it would break the completeness/dedup logic already built in Batches 2–5, which assumes one canonical `Track` row per recording.
 
-Grooverr additionally generates a `.m3u8` manifest file per playlist, so external players (Plex, Navidrome, Jellyfin) and desktop/mobile clients can browse and play the playlist as a first-class object without Grooverr ever duplicating audio on disk:
+Playlists are represented on disk as **generated `.m3u8` files**, not folders of audio:
 
-- **Location:** `{MusicRoot}/Playlists/{PlaylistName}.m3u8` — a name collision appends a short disambiguator; the path is assigned once (on first generation) and reused for every future regeneration of that playlist
-- **Format:** standard `#EXTM3U` header, with an `#EXTINF:<duration_seconds>,<Artist> - <Title>` line before each track's absolute file path (the same path Section 6 already produced for that track)
-- **Content:** only tracks with `Track.status = downloaded` appear. The file is **regenerated in full** (never incrementally patched) every time a member track's download completes, so it fills in automatically as the playlist's tracks finish downloading — an initial (possibly empty) manifest is written as soon as the playlist is created
-- `Playlist.m3u_path` / `Playlist.m3u_generated_at` (Section 5) record where the manifest lives and when it was last regenerated
+```
+{MusicRoot}/Playlists/{PlaylistName}.m3u8
+```
+
+Example:
+```
+/music/Playlists/Weekend Vibes.m3u8
+```
+
+This is the standard mechanism Plex, Navidrome, Jellyfin, and Plexamp (as a Plex client) are all built around — each of them can scan `.m3u`/`.m3u8` files sitting in the library and surface them as a native playlist, without needing the referenced audio to live inside the playlist file's own folder. Exact auto-import behavior varies slightly by server (e.g. some watch the whole library root, some need the playlists folder specifically included in the scan path) — treat this as **best-effort native integration**, not a hard guarantee for every server/version. Worst case, the `.m3u8` is still a completely standard, portable playlist file openable in any music player even if a given server doesn't auto-import it.
+
+**M3U8 generation rules:**
+- Entries reference tracks via **relative paths from the playlist output folder**, so the whole `{MusicRoot}` remains portable/movable as a unit
+- Only tracks with `Track.status = downloaded` are included — a playlist referencing a not-yet-downloaded file would be a broken entry in Plex/Navidrome/etc., so the file is regenerated (not written once and left stale) every time a track in that playlist finishes downloading
+- Track order follows `PlaylistTrack.position`
+- `Playlist.m3u_path` and `Playlist.m3u_generated_at` are updated on every regeneration
+- Illegal filesystem characters in the playlist name are sanitized using the same rule as track/album names (Section 6's illegal-character rule above)
+- **The playlist output folder itself defaults to `Playlists/` relative to `{MusicRoot}` but is Settings-configurable** (decision resolved 2026-07-13, implemented in Batch 8) — the same pattern as the track path template. Regenerating a playlist after this setting changes must write to the new location, not silently keep using the old default.
+
+**Where this lands in the batch plan:** the core M3U8 generation (fires on "track status flips to downloaded") landed as a small addition to the download pipeline (Section 7.3) ahead of schedule — implemented directly rather than waiting for a dedicated batch, since Claude Code was already mid-rebuild of the Library/Albums section when this decision was made. Two bugs were found and fixed during that work: a circular import (orchestration moved to `app.downloader.m3u`, which has no dependency on `app.runtime`/`app.queue`) and a silent collision bug in SQLModel's `session.exec()` — it returns bare scalars for single-column selects, not `Row` tuples, so `row[0]` was slicing the first *character* off a stored path instead of indexing a tuple, meaning two same-named playlists silently collided onto one file. The output-folder configurability follow-up is scoped into Batch 8 above, since that's where the settings persistence layer is being built anyway.
 
 ---
 
@@ -243,7 +259,7 @@ Grooverr additionally generates a `.m3u8` manifest file per playlist, so externa
 ### 7.4 Library completeness tracking
 - Every album's card in the Library view shows `X of Y tracks` — `Y` comes from the metadata source's `total_tracks`, `X` is a live count of `Track.status = downloaded` for that album
 - "Complete this album" button enqueues `download` jobs for every track in that album currently `status != downloaded`
-- Same pattern for a playlist: "Complete this playlist" queues everything not yet downloaded
+- Same pattern for a playlist: "Complete this playlist" queues everything not yet downloaded. As each queued track finishes downloading, the playlist's `.m3u8` file (Section 6.1) regenerates to include it — the playlist becomes progressively more complete on disk in real time, same as the completeness badge does in the UI.
 
 ### 7.5 Queue system
 - Two visually distinct sub-queues in the UI: **Resolving** (metadata jobs) and **Downloading** (audio fetch jobs) — mirrors the dashboard mockup's "Active Queue" panel
@@ -425,22 +441,26 @@ Each batch below is scoped to be a self-contained agent session. **Confirm the "
 - Full Queue screen (Resolving/Downloading tabs, retry/cancel)
 - "Complete this album" / "Complete this playlist" actions
 - Verify the Batch 6 duration cross-check fix (Section 7.3) holds under the Library/Queue UI's real usage patterns — e.g. retrying a track from the Queue screen must go through the same cross-check, not a separate retry code path that bypasses it
+- **M3U8 playlist file generation** (Section 6.1, decision resolved 2026-07-13) — backend addition to the download pipeline: on every track status flip to `downloaded`, regenerate the `.m3u8` for any playlist that track belongs to. Playlists tab in the UI should show the current `m3u_path` (or an indicator that it hasn't been generated yet for an empty/all-missing playlist).
 
 **Definition of done:**
 - Library screen tested against 1,000+ seeded albums **and** a realistic set of seeded playlists, scroll performance verified against the Section 9.5 benchmarks on both tabs
 - Album completeness badges are accurate and update live as tracks finish downloading
 - Playlist completeness badges (same component, reused) behave identically
+- A seeded playlist's `.m3u8` file is inspected directly on disk and confirmed to: contain only downloaded tracks, use correct relative paths, reflect `PlaylistTrack.position` ordering, and regenerate correctly as more of its tracks finish downloading mid-test
 
 ---
 
 ### Batch 8 — Settings screen + credential handling
 **Scope:**
 - Settings UI: MusicBrainz user-agent config, YouTube cookie file upload (reuse the exact drag-and-drop pattern already proven working in spotDL-GUI — use a `<label for=>` wrapping the hidden file input, not an `onclick` handler, per the lesson learned there), default quality ceiling, output path template editor with live preview
+- **Playlist output folder is now a Settings-configurable path** (decision resolved 2026-07-13), stored under the same `Settings` key/value mechanism as the track path template. Default remains `Playlists/` relative to `{MusicRoot}` (Section 6.1), but a user with an existing Navidrome/Plex setup that expects playlists somewhere else shouldn't need a code change to accommodate it. This was flagged as a hardcoded assumption during the M3U8 implementation — folding the fix into this batch since it's already building the settings persistence layer, rather than a separate follow-up pass later.
 - Credentials stored in `/config` volume, never in the music output volume (same security pattern as spotDL-GUI)
 
 **Definition of done:**
 - Settings persist across container restarts
 - Cookie file upload works correctly in Chrome, Firefox, and Edge (this bit specifically bit us before — verify in all three)
+- Changing the playlist output folder setting and regenerating an existing playlist's M3U8 correctly writes to the new location, not the old default
 
 ---
 
@@ -489,17 +509,13 @@ Fable's Batch 6 report flagged two items needing a decision before Batch 7:
 5. **Video ID trust bug** — Batch 6 testing found that a `Track` with a pre-existing `youtube_video_id` (search results, playlist imports) skipped duration cross-checking entirely, risking a silent audio mismatch with no error surfaced anywhere. **Fixed immediately rather than deferred to Batch 10** — Section 7.3 updated to make duration cross-checking mandatory regardless of whether the video ID is fresh or pre-existing. Treated as a correctness gap in already-specified behavior (7.3 already established duration matching as "the primary anti-mismatch signal"), not new hardening scope, hence not deferred.
 6. **Playlists screen placement** — not dictated by the original spec. Decided: **tabs within the Library screen** (Albums / Playlists), reusing the same virtualized grid and completeness-badge components rather than a separate top-level nav item or a buried footer panel. Section 8 and Batch 7's scope updated accordingly.
 
-### Batch 7 implementation notes (2026-07-13)
+### Resolved during Batch 7 kickoff (2026-07-13)
 
-- **Implemented and verified, item 5 above.** The actual root cause was two-layered, not just a missing check: `Track.youtube_video_id` was never persisted as first-class data (only derived into `audio_source_url`), and the download pipeline rebuilt `ResolvedTrack` purely from DB columns that didn't include it — so the id was silently *dropped* before ever reaching the matcher, not blindly trusted by it. Fixed both layers: added `Track.youtube_video_id` as a persisted column, wired it through the create/resolve/download handlers, and made `find_audio_source` fetch the candidate's actual duration and cross-check it with the same tolerance as a fresh search match, falling through to search on mismatch or lookup failure. Verified against real MusicBrainz/YouTube Music APIs (not just unit tests): a correct id downloads directly, a wrong-duration id gets rejected and replaced with a fresh match — confirmed by checking the *persisted* video id changed, not just that a file appeared. Also proved retrying a job from the Queue reruns the identical cross-check (same `_download` code path; there is no separate retry execution path in the codebase to bypass).
-- **Noted:** duration-only matching has an inherent, pre-existing false-accept risk when two unrelated tracks coincidentally have very similar lengths (common for pop songs clustering around 3-4 minutes) — discovered this by accident during live verification when an adversarially-chosen "poison" video's real duration (213s) landed within tolerance of a fabricated target (215s) and was accepted. This is a property of the chosen anti-mismatch strategy (duration, not audio fingerprinting) applying everywhere duration matching is used, not a defect introduced by this fix — flagging for awareness, not proposing a fix within Batch 7's scope.
-- **Implemented and verified, item 6 above.** Library screen rebuilt with Albums/Playlists segmented tabs. Extracted the virtualization logic into a shared `VirtualizedCardGrid` component and generalized the card markup into a shared `LibraryCard` shell so both tabs render through identical code, not just visually-matching parallel implementations. Verified live against 1,500 seeded albums and 80 seeded playlists (1,200 playlist-track links, drawn from the existing track pool): both tabs stay at ~30-50 rendered DOM cards regardless of total count, and clicking "Complete this playlist" on a card queues real download jobs (confirmed via the queue API, not just the UI's optimistic state).
+7. **Playlist folder structure on disk** — user flagged (correctly) that a naive `Music/Playlists/{Playlist}/{Track}` folder tree would duplicate audio files already stored under `Music/{Artist}/{Album}/`, doubling storage and breaking the single-canonical-Track-row dedup logic. **Resolved:** tracks are never duplicated — playlists are represented as generated `.m3u8` files at `Music/Playlists/{PlaylistName}.m3u8`, referencing the canonical track paths via relative links. This is the same mechanism Plex/Navidrome/Jellyfin/Plexamp expect for playlist scanning. Full detail in new Section 6.1; `Playlist.m3u_path` field added to the data model; regeneration hook added to the download pipeline (Section 7.3) and to Batch 7's scope, since Claude Code was mid-rebuild of the Library section when this was caught.
 
-### Section 6.1 implementation notes (2026-07-14)
+### Resolved during Batch 8 kickoff (2026-07-13)
 
-- **Implemented and verified.** `app/downloader/m3u.py` generates the `#EXTM3U` manifest; `Playlist.m3u_path`/`m3u_generated_at` are additive columns (migration verified against a simulated pre-6.1 DB with an existing row). Regeneration is wired into both playlist creation (initial, likely-empty manifest) and the download pipeline's success path (any playlist containing the just-completed track gets its manifest rewritten). Verified against a real 3-track YouTube Music playlist end-to-end: all three tracks downloaded to their normal Artist/Album paths, the generated `.m3u8` contained correct `#EXTINF`/path lines, every referenced path resolved to a real file, and the `Playlists/` folder contained only the manifest — zero duplicated audio.
-- **Found and fixed during this work (not introduced by it, but caught by its tests):** the initial `regenerate_playlist_m3u` was placed in `app.api.playlists`, which created a genuine circular import (`app.queue.pipeline` → `app.api.playlists` → `app.runtime` → the `app.queue` package's own `__init__.py` → `workers` → `pipeline`, i.e. back to itself mid-initialization). Moved the function into `app.downloader.m3u`, which has no dependency on `app.runtime`/`app.queue`, resolving it cleanly. Separately, the collision-disambiguation logic had a real bug: `session.exec()` (SQLModel's session wrapper) returns bare scalars for a single-column `select()`, not `Row` tuples — `row[0]` was silently slicing the first *character* off each stored path instead of indexing a tuple, so two playlists with the same name always silently collided onto one file. Fixed and audited the rest of the codebase for the same mistake (one other `row[0]` usage exists, in `app/api/seed.py`, but it correctly uses `connection.execute()` — SQLAlchemy Core, not SQLModel's `session.exec()` — where `row[0]` is the correct pattern).
-- **Assumed:** the manifest lives at `{MusicRoot}/Playlists/{name}.m3u8` (not a `Settings`-configurable location, unlike the track path template) — reasonable default, easy to make configurable later if wanted. Only `Track.status = downloaded` tracks appear in the manifest; a track that later errors or gets removed would only disappear on the *next* regeneration (there's no proactive "remove now" trigger for status regressions, since none of v1's workflows create that scenario — retry keeps the same track row, and there's no track-removal feature yet).
+8. **Playlist output folder configurability** — the M3U8 implementation (item 7 above) shipped with the `Playlists/` folder hardcoded relative to `{MusicRoot}`. Flagged by Claude Code as a reasonable-but-inflexible default. **Resolved:** made Settings-configurable, same mechanism as the track path template, folded into Batch 8 since that's already building the settings persistence layer — see updated Batch 8 scope and Section 6.1. Two unrelated bugs were caught and fixed during the original M3U8 implementation and are worth keeping on record for the eventual full audit: a circular import (`app.api.playlists` → `app.runtime` → `app.queue` → back to itself; moved the orchestration function to `app.downloader.m3u`), and a silent collision bug where `session.exec()` returns bare scalars rather than `Row` tuples for single-column selects — `row[0]` was indexing into the *string* (slicing its first character) instead of a tuple, causing two same-named playlists to silently overwrite each other's M3U8 file. The codebase was audited for the same `row[0]` mistake elsewhere; one other instance was found and confirmed to be using a different, correct API.
 
 ### Original assumptions log
 
