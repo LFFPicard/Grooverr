@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>Grooverr</Name>
+  <Repository>lffpicard/grooverr</Repository>
+  <Registry>https://hub.docker.com/r/lffpicard/grooverr</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/LFFPicard/Grooverr/issues</Support>
+  <Project>https://github.com/LFFPicard/Grooverr</Project>
+  <Overview>Grooverr is a self-hosted music acquisition and library manager. Point it at an artist, album, track, or YouTube Music playlist and it resolves metadata against MusicBrainz, downloads audio via YouTube Music, converts to your chosen format (mp3/flac/m4a/opus/wav/ogg), tags it with the correct MBIDs and embedded cover art, and files it into your library using a clean, consistent naming convention. A live queue shows resolving and downloading jobs separately, and the whole thing is designed to stay fast even with a library in the thousands of tracks. Single-user, no accounts, no Spotify dependency.&#10;&#10;Point Music to your existing library share and Config to a dedicated appdata folder, set PUID/PGID to match your library's ownership, then finish setup (MusicBrainz user-agent, optional YouTube cookie file, default quality, output path template) from the Settings screen in the WebUI.</Overview>
+  <Category>MediaApp:Music</Category>
+  <WebUI>http://[IP]:[PORT:8000]/</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/LFFPicard/Grooverr/main/unraid/grooverr.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/LFFPicard/Grooverr/main/design/icon.png</Icon>
+  <ExtraParams/>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires/>
+  <Config Name="WebUI Port" Target="8000" Default="8000" Mode="tcp" Description="Port for the Grooverr web interface" Type="Port" Display="always" Required="true" Mask="false">8000</Config>
+  <Config Name="Music" Target="/music" Default="/mnt/user/music/" Mode="rw" Description="Your music library. Grooverr reads what's already there (to skip duplicates) and writes newly downloaded albums/tracks here using the Artist/Album (Year)/## - Title convention." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/music/</Config>
+  <Config Name="Config" Target="/config" Default="/mnt/user/appdata/grooverr/" Mode="rw" Description="Grooverr's own database, settings, and optional YouTube cookies file. Keep this separate from the Music path above." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/grooverr/</Config>
+  <Config Name="PUID" Target="PUID" Default="99" Mode="" Description="User ID Grooverr runs as, so files written to Music/Config are owned by a user you can manage. 99 is Unraid's built-in 'nobody' user — change it to match your library's existing ownership if different." Type="Variable" Display="always" Required="false" Mask="false">99</Config>
+  <Config Name="PGID" Target="PGID" Default="100" Mode="" Description="Group ID Grooverr runs as. 100 is Unraid's built-in 'users' group — change it to match your library's existing ownership if different." Type="Variable" Display="always" Required="false" Mask="false">100</Config>
+</Container>
