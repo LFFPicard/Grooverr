@@ -220,7 +220,7 @@ Rules:
 
 ### 7.3 Download pipeline
 1. Worker picks up a `download` QueueItem
-2. Search YouTube Music (`ytmusicapi`) for a best match using title + artist + duration (duration matching within a few seconds tolerance is the primary anti-mismatch signal)
+2. Search YouTube Music (`ytmusicapi`) for a best match using title + artist + duration (duration matching within a few seconds tolerance is the primary anti-mismatch signal). **This duration cross-check is mandatory on every download, including when the `Track` row already carries a `youtube_video_id`** — a pre-existing ID must never be trusted blindly. Fetch the candidate video's duration before downloading and compare it against `Track.duration_seconds` using the same tolerance as a fresh search match; if it falls outside tolerance, treat it as no match (fall through to a fresh search, or surface an error if that also fails) rather than downloading it. **Decision (resolved 2026-07-13):** this was found during Batch 6 testing as a silent-mismatch bug affecting any track with a pre-populated video ID (search results, playlist imports) — fixed immediately rather than deferred to Batch 10, since it's a correctness gap in already-specified behavior, not new hardening scope.
 3. If no confident YouTube Music match, fall back to a plain YouTube search via the same matching logic
 4. `yt-dlp` fetches the audio at the job's `requested_quality`
 5. Post-process: convert to target format if needed, embed tags via `mutagen`, write to the path per Section 6
@@ -274,7 +274,7 @@ Dark mode variant (toggle, not default) — see the reference mockup for exact d
 
 1. **Dashboard** — stat row (downloading / queued / library size / incomplete albums), active queue panel, recent activity feed, "incomplete albums" grid teaser. *(Reference: `/design/dashboard-reference.html` in the repo — this is the confirmed Sleeve Catalog mockup, use it as the literal starting point, do not redesign from scratch. It's a static standalone HTML file with inline CSS; treat its layout, spacing, and component structure as canonical, and port it into the actual React component structure rather than reinventing it.)*
 2. **Search** — search bar (same as dashboard's, or a dedicated larger version), result cards for tracks/albums/artists/playlists, "Add to library" action per result
-3. **Library** — full browsable grid of all albums, filterable by artist / completeness status / format, each card shows the completion badge pattern from the dashboard mockup. Clicking an album opens an **Album Detail** view listing every track with its individual status (downloaded / missing / queued / error) and a per-track "download this one" action
+3. **Library** — tabbed view: **Albums** and **Playlists** as segmented tabs within the one Library screen (not a separate top-level nav item, and not a buried footer panel — **decision resolved 2026-07-13**). Albums tab: full browsable grid of all albums, filterable by artist / completeness status / format, each card shows the completion badge pattern from the dashboard mockup. Clicking an album opens an **Album Detail** view listing every track with its individual status (downloaded / missing / queued / error) and a per-track "download this one" action. Playlists tab: same card-grid pattern and completeness badge treatment as Albums, since playlists need the identical "X of Y tracks" + "Complete this playlist" UI that albums already have — reuse the same components rather than building parallel ones.
 4. **Queue** — full queue view (not just the dashboard teaser), split into Resolving / Downloading tabs, with retry/cancel per item
 5. **Settings** — API credentials (MusicBrainz doesn't need a key but rate-limits by user-agent string; optional YouTube cookie file upload exactly like the spotDL-GUI pattern already proven), default quality ceiling, output path template editor, theme toggle
 
@@ -407,14 +407,16 @@ Each batch below is scoped to be a self-contained agent session. **Confirm the "
 
 ### Batch 7 — Frontend: Library + Album Detail + Queue
 **Scope:**
-- Library grid with virtualization (Section 9.4) — must be tested against a seeded large dataset, not just a handful of albums
+- Library screen with **Albums / Playlists tabs** (Section 8 — decision resolved 2026-07-13), both tabs sharing the same virtualized grid component (Section 9.4) — must be tested against a seeded large dataset on both tabs, not just a handful of albums
 - Album Detail view (per-track status list, individual retry/download actions)
 - Full Queue screen (Resolving/Downloading tabs, retry/cancel)
 - "Complete this album" / "Complete this playlist" actions
+- Verify the Batch 6 duration cross-check fix (Section 7.3) holds under the Library/Queue UI's real usage patterns — e.g. retrying a track from the Queue screen must go through the same cross-check, not a separate retry code path that bypasses it
 
 **Definition of done:**
-- Library screen tested against 1,000+ seeded albums, scroll performance verified against the Section 9.5 benchmarks
+- Library screen tested against 1,000+ seeded albums **and** a realistic set of seeded playlists, scroll performance verified against the Section 9.5 benchmarks on both tabs
 - Album completeness badges are accurate and update live as tracks finish downloading
+- Playlist completeness badges (same component, reused) behave identically
 
 ---
 
@@ -467,6 +469,13 @@ Four decisions were flagged by the implementing agent as blockers before Batch 6
 3. **Cover art on missing artwork** — confirmed current behavior (warn + proceed without art) is correct, not a bug. Section 6 wording softened from "mandatory" to "attempted, non-blocking." Missing-art tracks should be visually flagged in the Library UI (Batch 7).
 4. **Add-artist scope** — confirmed row-only for v1 is correct. Full discography pulling/monitoring explicitly deferred to v2 in Section 3's non-goals.
 
+### Resolved during Batch 6 review (2026-07-13)
+
+Fable's Batch 6 report flagged two items needing a decision before Batch 7:
+
+5. **Video ID trust bug** — Batch 6 testing found that a `Track` with a pre-existing `youtube_video_id` (search results, playlist imports) skipped duration cross-checking entirely, risking a silent audio mismatch with no error surfaced anywhere. **Fixed immediately rather than deferred to Batch 10** — Section 7.3 updated to make duration cross-checking mandatory regardless of whether the video ID is fresh or pre-existing. Treated as a correctness gap in already-specified behavior (7.3 already established duration matching as "the primary anti-mismatch signal"), not new hardening scope, hence not deferred.
+6. **Playlists screen placement** — not dictated by the original spec. Decided: **tabs within the Library screen** (Albums / Playlists), reusing the same virtualized grid and completeness-badge components rather than a separate top-level nav item or a buried footer panel. Section 8 and Batch 7's scope updated accordingly.
+
 ### Original assumptions log
 
 Track anything the agent has to assume here so it can be reviewed and corrected rather than silently baked in:
@@ -476,19 +485,6 @@ Track anything the agent has to assume here so it can be reviewed and corrected 
 - **Assumed:** No built-in scheduler for "watch artist for new releases" in v1 — flagged as a backlog item, not built now.
 - **Open:** Exact logo asset — placeholder monogram until a real logo is supplied.
 - **Open:** Whether genre tagging pulls from MusicBrainz's genre/tag data or is left blank when unavailable — needs a decision before Batch 3.
-
-### Batch 6 additions (2026-07-12)
-
-- **Assumed:** Batch 6's Dashboard scope implies a "Recent Activity" data source that Section 10 doesn't explicitly define. Added `GET /api/activity` — the newest N finished/errored `QueueItem`s joined to `Track`/`Album`/`Artist`, not paginated (always "latest N", no `offset`). Also extended `QueueItemOut` with `artist_name`/`album_title` (queue rows otherwise can't render "Artist · Album" subtitles). Both are small additive extensions, no schema changes.
-- **Noted:** The dashboard-reference mockup's search placeholder text and one "Added artist watch" activity example are relics of an earlier product ("SpotGet") this mockup was adapted from — branding was corrected to Grooverr and the artist-watch example dropped (matches the Section 3 non-goal), everything else ported as-is.
-
-### Batch 7 additions (2026-07-12)
-
-- **Assumed:** Section 8 lists no dedicated "Playlists" screen, but Batch 7's scope explicitly requires a "Complete this playlist" action to exist somewhere. Placed a compact Playlists panel at the bottom of the Library page, listing each playlist with X/Y tracks and a Complete action — the most direct placement given the existing screen list. Worth a dedicated Playlists screen/tab in a later batch if playlists become a primary use case rather than an incidental one.
-- **Assumed:** Track.has_artwork (Section 11 Batch 7 backend note) drives the "flag missing-art tracks" decision — surfaced in Album Detail's per-track row as a small "no artwork" label, not at the album-grid level (art presence is a per-file post-download fact, not a metadata-source fact the album card already shows via cover_art_url).
-- **Fixed (pre-existing bug, not introduced by Batch 7):** `_find_or_create_artist`/`_find_or_create_album` skipped their dedup lookup entirely when the resolved name/title was `None`, so two tracks added with no artist/album metadata at all would each mint a fresh "Unknown Artist"/"Unknown Album" row instead of sharing one. Surfaced by testing the new playlist-add path, but applies to every add-to-library flow. Fixed by searching on the effective (fallback-applied) name in both cases.
-- **Found (real, unfixed):** Testing the playlist-add path with synthetic malformed video IDs (6 characters, not YouTube's 11) revealed that `find_audio_source` trusts an existing `youtube_video_id` on a resolved track completely unconditionally — no duration cross-check, unlike the search-based matching path (Section 7.3's "duration matching... is the primary anti-mismatch signal"). yt-dlp/YouTube resolved the malformed ID to *some* real 7-minute video and it downloaded successfully with correct-looking tags, silently mismatched. This means any track that arrives with a video ID (search results, playlist imports) has zero anti-mismatch protection before download. Flagging for Batch 10 (hardening pass, "malformed metadata" is explicitly in scope) — likely fix is a duration sanity check against the *download's actual length* post-fetch, or re-validating the video id's metadata before committing to the download.
-- **Fixed (found via live browser testing):** the Queue screen's error-status Pill had no max-width and a JS-truncated string still ~2x wider than its 92px grid column, visually overlapping and clipping the Retry button. Pill now truncates defensively via CSS regardless of caller string length; the Queue screen (which has more horizontal room than the Dashboard's compact teaser) got a wider dedicated column.
 
 ---
 
