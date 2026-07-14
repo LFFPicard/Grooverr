@@ -186,3 +186,66 @@ export function useAddToLibrary() {
     },
   })
 }
+
+// ── Settings (Batch 8) ──────────────────────────────────────────────────
+
+export function useSettings() {
+  return useQuery({
+    queryKey: ['settings'],
+    queryFn: () => api.get('/api/settings'),
+  })
+}
+
+export function useUpdateSettings() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (partial) => api.put('/api/settings', partial),
+    onSuccess: (data) => {
+      queryClient.setQueryData(['settings'], data)
+    },
+  })
+}
+
+export function useCookieStatus() {
+  return useQuery({
+    queryKey: ['settings', 'youtube-cookies'],
+    queryFn: () => api.get('/api/settings/youtube-cookies'),
+  })
+}
+
+export function useUploadCookies() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (file) => {
+      const formData = new FormData()
+      formData.append('file', file)
+      return api.upload('/api/settings/youtube-cookies', formData)
+    },
+    onSuccess: (data) => {
+      queryClient.setQueryData(['settings', 'youtube-cookies'], data)
+    },
+  })
+}
+
+export function useDeleteCookies() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.del('/api/settings/youtube-cookies'),
+    onSuccess: (data) => {
+      queryClient.setQueryData(['settings', 'youtube-cookies'], data)
+    },
+  })
+}
+
+/** Debounced live preview of the output path template — queryFn only
+ * fires after `template` settles (Settings page debounces the input). */
+export function usePathPreview(template) {
+  return useQuery({
+    queryKey: ['settings', 'preview-path', template],
+    queryFn: () => {
+      const params = template ? `?template=${encodeURIComponent(template)}` : ''
+      return api.get(`/api/settings/preview-path${params}`)
+    },
+    retry: false,
+  })
+}
