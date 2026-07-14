@@ -1,4 +1,4 @@
-version: "3"
+version: "3.8"
 
 services:
   grooverr:
@@ -8,6 +8,21 @@ services:
     restart: unless-stopped
     ports:
       - "8000:8000"
+    environment:
+      # Match these to the user who should own files written to the
+      # volumes below (`id -u` / `id -g` on the host). Defaults to 1000:1000.
+      - PUID=1000
+      - PGID=1000
     volumes:
+      # Your existing (or new) music library — Grooverr reads and writes
+      # here using the Section 6 naming convention.
       - /path/to/your/music:/music
+      # Grooverr's own database, settings, and optional YouTube cookies —
+      # never mix this with the /music volume above.
       - /path/to/appdata/Grooverr:/config
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3

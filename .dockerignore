@@ -1,0 +1,26 @@
+# Keep the build context (and layer cache) small — none of this is needed
+# inside the image.
+
+.git/
+.github/
+.claude/
+design/
+*.md
+progress.md
+
+# Python
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+backend/.venv/
+backend/.devdata/
+backend/*.db
+backend/*.db-wal
+backend/*.db-shm
+
+# Node / frontend build artifacts (rebuilt fresh in the image)
+frontend/node_modules/
+frontend/dist/
+
+# OS
+**/.DS_Store
