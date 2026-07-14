@@ -7,10 +7,10 @@ import random
 import uuid
 from datetime import datetime
 
-from sqlalchemy import insert
+from sqlalchemy import insert, select
 
 from app.db import engine
-from app.models import Album, Artist, Track
+from app.models import Album, Artist, Playlist, PlaylistTrack, Track
 
 FIRST = ["Velvet", "Neon", "Crimson", "Silver", "Echo", "Lunar", "Golden", "Static",
          "Wild", "Broken", "Electric", "Paper", "Hollow", "Midnight", "Glass"]
@@ -73,9 +73,50 @@ def seed_library(album_count: int = 1200, tracks_per_album: int = 10,
     return {"artists": len(artists), "albums": len(albums), "tracks": len(tracks)}
 
 
+def seed_playlists(playlist_count: int = 40, tracks_per_playlist: int = 15,
+                   seed: int = 43) -> dict:
+    """Insert playlist_count Playlist rows, each linking (via PlaylistTrack)
+    to a random sample of already-seeded tracks — run after seed_library so
+    there's a track pool to draw from. Batch 7 DoD: 'a realistic set of
+    seeded playlists' for the Library screen's Playlists tab."""
+    rng = random.Random(seed)
+    now = datetime.utcnow()
+
+    with engine.begin() as connection:
+        track_ids = [row[0] for row in connection.execute(select(Track.id))]
+    if not track_ids:
+        raise RuntimeError("seed_playlists requires tracks already in the DB — run seed_library first")
+
+    playlists, playlist_tracks = [], []
+    for i in range(playlist_count):
+        playlist_id = str(uuid.uuid4())
+        playlists.append({
+            "id": playlist_id,
+            "name": f"{rng.choice(FIRST)} {rng.choice(SECOND)} Mix {i}",
+            "source": "youtube-music",
+            "source_url": None,
+            "source_playlist_id": f"PLseed{i}",
+            "created_at": now,
+        })
+        sample = rng.sample(track_ids, k=min(tracks_per_playlist, len(track_ids)))
+        for position, track_id in enumerate(sample, start=1):
+            playlist_tracks.append({
+                "id": str(uuid.uuid4()), "playlist_id": playlist_id,
+                "track_id": track_id, "position": position,
+            })
+
+    with engine.begin() as connection:
+        connection.execute(insert(Playlist), playlists)
+        for start in range(0, len(playlist_tracks), 5000):
+            connection.execute(insert(PlaylistTrack), playlist_tracks[start:start + 5000])
+    return {"playlists": len(playlists), "playlist_tracks": len(playlist_tracks)}
+
+
 if __name__ == "__main__":
     import sys
     count = int(sys.argv[1]) if len(sys.argv) > 1 else 1200
+    playlist_count = int(sys.argv[2]) if len(sys.argv) > 2 else 40
     from app.db import init_db
     init_db()
     print(seed_library(count))
+    print(seed_playlists(playlist_count))

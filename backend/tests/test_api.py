@@ -492,6 +492,23 @@ def test_library_pagination_at_scale(clean_db):
     assert all(i["artist_id"] == artist_id for i in by_artist["items"])
 
 
+def test_playlist_pagination_at_scale(clean_db):
+    import time
+    from app.api.seed import seed_library, seed_playlists
+
+    seed_library(album_count=400, tracks_per_album=10)
+    counts = seed_playlists(playlist_count=60, tracks_per_playlist=15)
+    assert counts["playlists"] == 60
+
+    start = time.perf_counter()
+    page = client.get("/api/library/playlists?limit=20&offset=40").json()
+    elapsed = time.perf_counter() - start
+    assert page["total"] == 60
+    assert len(page["items"]) == 20
+    assert elapsed < 1.0, f"page fetch took {elapsed:.3f}s on 60 playlists"
+    assert all(0 <= p["downloaded_tracks"] <= p["total_tracks"] for p in page["items"])
+
+
 def test_openapi_lists_every_endpoint(clean_db):
     spec = client.get("/openapi.json").json()
     paths = spec["paths"]
