@@ -1,0 +1,39 @@
+<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="vinylSheen" cx="35%" cy="30%" r="75%">
+      <stop offset="0%" stop-color="#3A3050"/>
+      <stop offset="100%" stop-color="#241D33"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Vinyl record body -->
+  <circle cx="240" cy="280" r="170" fill="url(#vinylSheen)"/>
+
+  <!-- Groove rings -->
+  <circle cx="240" cy="280" r="152" fill="none" stroke="#4B3F72" stroke-width="2" opacity="0.55"/>
+  <circle cx="240" cy="280" r="132" fill="none" stroke="#4B3F72" stroke-width="2" opacity="0.45"/>
+  <circle cx="240" cy="280" r="112" fill="none" stroke="#4B3F72" stroke-width="2" opacity="0.35"/>
+  <circle cx="240" cy="280" r="92"  fill="none" stroke="#4B3F72" stroke-width="2" opacity="0.28"/>
+  <circle cx="240" cy="280" r="72"  fill="none" stroke="#4B3F72" stroke-width="2" opacity="0.22"/>
+
+  <!-- Record label -->
+  <circle cx="240" cy="280" r="54" fill="#C98A2C"/>
+  <circle cx="240" cy="280" r="54" fill="none" stroke="#F6E9D2" stroke-width="1.5" opacity="0.5"/>
+
+  <!-- Spindle hole -->
+  <circle cx="240" cy="280" r="6" fill="#241D33"/>
+
+  <!-- Tonearm shaft: pivot (410,95) to headshell (318,205) -->
+  <line x1="410" y1="95" x2="318" y2="205" stroke="#4B3F72" stroke-width="14" stroke-linecap="round"/>
+
+  <!-- Tonearm pivot base -->
+  <circle cx="410" cy="95" r="24" fill="#4B3F72"/>
+  <circle cx="410" cy="95" r="9" fill="#F6E9D2"/>
+
+  <!-- Headshell -->
+  <rect x="301" y="196" width="34" height="18" rx="6" fill="#C98A2C"
+        transform="rotate(-50 318 205)"/>
+
+  <!-- Stylus tip, resting on the outer grooves -->
+  <circle cx="305" cy="220" r="5" fill="#241D33"/>
+</svg>

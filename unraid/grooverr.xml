@@ -13,7 +13,7 @@
   <Category>MediaApp:Music</Category>
   <WebUI>http://[IP]:[PORT:8000]/</WebUI>
   <TemplateURL>https://raw.githubusercontent.com/LFFPicard/Grooverr/main/unraid/grooverr.xml</TemplateURL>
-  <Icon>https://raw.githubusercontent.com/LFFPicard/Grooverr/main/design/icon.png</Icon>
+  <Icon>https://raw.githubusercontent.com/LFFPicard/Grooverr/master/design/icon.png</Icon>
   <ExtraParams/>
   <PostArgs/>
   <CPUset/>
