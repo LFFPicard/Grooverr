@@ -49,6 +49,8 @@ class Pipeline:
                 await self._resolve(job)
             elif job.job_type.value == "download":
                 await self._download(job)
+            elif job.job_type.value == "album_add":
+                await self._album_add(job)
             else:
                 raise RuntimeError(f"Unknown job type {job.job_type!r}")
         except Exception as exc:
@@ -57,6 +59,41 @@ class Pipeline:
             logger.exception("Job %s failed", job.id)
             self._mark_track_error(job.track_id, str(exc))
             self.queue.finish(job.id, error=str(exc))
+
+    # ── album_add (Section 11 item 15, post-audit) ─────────────────────────
+
+    async def _album_add(self, job: QueueItem) -> None:
+        """One release from a bulk 'Add entire discography' run — resolves
+        + persists + enqueues downloads via the exact same _add_album() a
+        manual single-album 'Add to library' click uses. Deferred import:
+        app.api.library -> app.runtime -> app.queue (this package's own
+        __init__, which imports workers -> pipeline) would be a circular
+        import at module load time if this were a top-level import — the
+        same trap Section 6.1 already documented once for playlists."""
+        from app.api.library import _add_album
+        from fastapi import HTTPException
+        from app.resolver.schemas import ResolvedAlbum
+
+        if not job.payload:
+            self.queue.finish(job.id, error="album_add job has no payload")
+            return
+        try:
+            resolved_album = ResolvedAlbum.model_validate_json(job.payload)
+        except ValueError as exc:
+            self.queue.finish(job.id, error=f"Malformed album_add payload: {exc}")
+            return
+
+        try:
+            await _add_album(
+                resolved_album,
+                quality=job.requested_quality,
+                output_format=job.requested_format,
+            )
+        except HTTPException as exc:
+            message = f"Could not add “{resolved_album.title}”: {exc.detail}"
+            self.queue.finish(job.id, error=message)
+            return
+        self.queue.finish(job.id)
 
     # ── metadata_resolve (Section 7.2) ────────────────────────────────────
 

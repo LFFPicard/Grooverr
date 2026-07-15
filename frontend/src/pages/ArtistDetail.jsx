@@ -22,14 +22,18 @@ function AddEntireDiscographyButton({ artistId }) {
   if (mutation.isPending) {
     return (
       <button disabled className="btn bg-panel-sunken border border-border text-text-dim">
-        Adding everything… this can take a little while
+        Adding…
       </button>
     )
   }
   if (result) {
+    // Post-audit (Section 11 item 15): the request now returns as soon as
+    // per-release jobs are enqueued, not once they're actually added —
+    // real progress shows up in the Queue screen (Section 7.5) as each
+    // release resolves, same as any other batch of adds.
     return (
       <button disabled className="btn bg-sage-tint text-sage">
-        {result.albums_added} releases added ✓ · {result.queued_jobs} queued
+        {result.jobs_enqueued} queued ✓ · {result.already_in_library} already in library — see Queue for progress
       </button>
     )
   }

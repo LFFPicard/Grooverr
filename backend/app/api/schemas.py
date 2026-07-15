@@ -90,10 +90,16 @@ class ArtistDiscographyItem(BaseModel):
 
 class DiscographyAddAllResponse(BaseModel):
     """Bulk 'Add entire discography' result — a one-time snapshot, not a
-    standing monitor (Section 3 non-goals, clarified 2026-07-14)."""
+    standing monitor (Section 3 non-goals, clarified 2026-07-14).
+
+    **Post-audit (Section 11 item 15, 2026-07-15):** this now returns
+    immediately after enqueueing one album_add job per not-already-owned
+    release — jobs_enqueued is a count of *queued* work, not completed
+    work. Actual per-release success/failure surfaces through the Queue UI
+    (Section 7.5) as each job finishes, same as any other batch of adds."""
     artist_id: str
-    albums_added: int = 0
-    queued_jobs: int = 0
+    release_groups_found: int = 0
+    jobs_enqueued: int = 0
     already_in_library: int = 0
 
 

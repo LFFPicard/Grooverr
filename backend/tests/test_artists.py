@@ -187,28 +187,189 @@ def test_add_to_library_resolves_canonical_release_from_release_group(clean_db, 
         assert album.musicbrainz_id == "rel-hybrid-theory"  # earliest official, not the reissue
 
 
-def test_add_entire_discography_queues_every_release_and_is_not_a_monitor(clean_db, mb_resolver):
+async def test_add_entire_discography_enqueues_album_add_jobs_and_returns_fast(clean_db, mb_resolver):
+    """Post-audit (Section 11 item 15): the endpoint no longer resolves
+    releases synchronously — it browses (cheap), then enqueues one
+    album_add job per not-already-owned release, and returns immediately.
+    No Album/Track rows exist yet at this point; that's the worker's job."""
+    import time
+    from app.models import JobType
+
     artist_id = _make_artist()
+    t0 = time.monotonic()
     response = client.post(f"/api/artists/{artist_id}/discography/add-all")
+    elapsed = time.monotonic() - t0
     assert response.status_code == 200
     body = response.json()
-    assert body["albums_added"] == 2
-    assert body["queued_jobs"] == 2  # one track per seeded release
+    assert body["release_groups_found"] == 2
+    assert body["jobs_enqueued"] == 2
+    assert body["already_in_library"] == 0
+    # Rate limiter is 0 in this fixture, so this is really testing "does
+    # the request block on N sequential resolves" (it would take several
+    # seconds even unlimited) vs "does it return after just the browse".
+    assert elapsed < 2.0, f"add-all took {elapsed:.2f}s — looks synchronous again"
+
+    with Session(engine) as session:
+        albums = session.exec(select(Album).where(Album.artist_id == artist_id)).all()
+        assert albums == []  # nothing resolved yet — that's the worker's job
+        jobs = session.exec(
+            select(QueueItem).where(QueueItem.job_type == JobType.album_add)
+        ).all()
+        assert len(jobs) == 2
+        assert all(j.status.value == "queued" for j in jobs)
+        assert all(j.payload for j in jobs)
+
+    # Now actually run those jobs through the real pipeline (same code a
+    # worker would call) to prove they resolve+persist correctly.
+    from app.queue.pipeline import Pipeline
+    from app.queue.service import QueueService
+
+    queue = QueueService()
+    pipeline = Pipeline(queue, resolver=mb_resolver)
+    with Session(engine) as session:
+        pending = session.exec(
+            select(QueueItem).where(QueueItem.job_type == JobType.album_add)
+        ).all()
+    for job in pending:
+        await pipeline.process(job)
 
     with Session(engine) as session:
         albums = session.exec(select(Album).where(Album.artist_id == artist_id)).all()
         assert {a.title for a in albums} == {"Hybrid Theory", "Meteora"}
         assert {a.musicbrainz_id for a in albums} == {"rel-hybrid-theory", "rel-meteora"}
-        assert len(session.exec(select(QueueItem)).all()) == 2
+        download_jobs = session.exec(
+            select(QueueItem).where(QueueItem.job_type == JobType.download)
+        ).all()
+        assert len(download_jobs) == 2  # one track per seeded release
 
-    # "One-time snapshot, not a standing monitor": running it again just
-    # re-adds nothing new (everything's already in the library) — there is
-    # no background job left behind that would auto-queue future releases.
+    # "One-time snapshot, not a standing monitor" + retry cost (Section 11
+    # item 15's fix): running it again must skip both already-owned
+    # releases WITHOUT enqueueing new album_add jobs for them — the whole
+    # point is a retry doesn't re-pay the per-release resolve cost.
     response = client.post(f"/api/artists/{artist_id}/discography/add-all")
     body = response.json()
-    assert body["albums_added"] == 2
+    assert body["release_groups_found"] == 2
     assert body["already_in_library"] == 2
-    assert body["queued_jobs"] == 0
+    assert body["jobs_enqueued"] == 0
     with Session(engine) as session:
         albums = session.exec(select(Album).where(Album.artist_id == artist_id)).all()
         assert len(albums) == 2  # no duplicates
+        jobs = session.exec(
+            select(QueueItem).where(QueueItem.job_type == JobType.album_add)
+        ).all()
+        assert len(jobs) == 2  # still just the original two — no new ones
+
+
+def test_add_entire_discography_retry_mid_flight_does_not_duplicate_pending_jobs(clean_db, mb_resolver):
+    """Confirmed live against the real Linkin Park discography (2026-07-15):
+    the first fix only skipped releases with a *finished* Album row —
+    calling add-all again while the first run's jobs were still queued
+    (not yet processed) silently double-enqueued every one of them (101
+    duplicates out of 219 in the real run). A release must be recognised
+    as pending the moment its job is enqueued, not just once it's done."""
+    from app.models import JobType
+
+    artist_id = _make_artist()
+    first = client.post(f"/api/artists/{artist_id}/discography/add-all").json()
+    assert first["jobs_enqueued"] == 2
+
+    # Nothing has been processed yet — both album_add jobs are still
+    # 'queued'. This is exactly the "killed/failed partway through" window.
+    second = client.post(f"/api/artists/{artist_id}/discography/add-all").json()
+    assert second["jobs_enqueued"] == 0, (
+        f"retry mid-flight enqueued {second['jobs_enqueued']} new jobs for "
+        "already-pending releases — duplicate work"
+    )
+    assert second["already_in_library"] == 2
+
+    with Session(engine) as session:
+        jobs = session.exec(
+            select(QueueItem).where(QueueItem.job_type == JobType.album_add)
+        ).all()
+        assert len(jobs) == 2  # still just the original two
+
+
+async def test_add_entire_discography_retry_recognizes_canonical_release_title_mismatch(
+    clean_db, monkeypatch
+):
+    """Confirmed live against the real Linkin Park discography (2026-07-15,
+    Section 11 item 15): 14 release-groups perpetually re-enqueued on every
+    retry, forever, because the canonical *release* _release_rank picks can
+    have a different title than its release-group's browse-time title
+    (e.g. release-group "Hybrid Theory (20th anniversary edition)" resolves
+    to the earliest official release, titled plain "Hybrid Theory") — the
+    job finishes successfully (finds/reuses the existing album, no error),
+    but a title-string dedup check never recognises it as handled. This
+    reproduces that exact shape with dedicated fixture data, isolated from
+    the shared module-level fixtures the other tests rely on."""
+    import httpx
+    from app.resolver.engine import MetadataResolver
+    from app.resolver.musicbrainz import MusicBrainzClient
+    from app.models import JobType
+
+    mbid = "artist-mbid-anniv"
+    rg_id = "rg-anniversary"
+    release_id = "rel-original-pressing"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        params = dict(request.url.params)
+        if path == "/ws/2/release-group":
+            offset = int(params.get("offset", 0))
+            groups = [{
+                "id": rg_id, "title": "Hybrid Theory (20th anniversary edition)",
+                "first-release-date": "2020-10-24", "primary-type": "Album",
+            }] if offset == 0 else []
+            return httpx.Response(200, json={"release-groups": groups, "release-group-count": 1})
+        if path == "/ws/2/release" and params.get("release-group") == rg_id:
+            return httpx.Response(200, json={"releases": [
+                {"id": release_id, "title": "Hybrid Theory", "status": "Official", "date": "2000-10-24"},
+            ]})
+        if path == f"/ws/2/release/{release_id}":
+            return httpx.Response(200, json={
+                "id": release_id, "title": "Hybrid Theory", "date": "2000-10-24",
+                "artist-credit": [{"name": "Linkin Park", "artist": {"id": mbid, "name": "Linkin Park"}}],
+                "release-group": {"primary-type": "Album"},
+                "media": [{"position": 1, "track-count": 1, "tracks": [
+                    {"position": 1, "title": "Papercut", "length": 185000, "recording": {"id": "rec-papercut"}}
+                ]}],
+            })
+        return httpx.Response(404, json={"error": f"unhandled: {path} {params}"})
+
+    mb_client = MusicBrainzClient(
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler), headers={"User-Agent": "test"}),
+        rate_limit_seconds=0,
+    )
+    resolver = MetadataResolver(musicbrainz=mb_client)
+    monkeypatch.setattr(runtime, "resolver", resolver)
+
+    artist_id = _make_artist(mbid=mbid, name="Linkin Park")
+    first = client.post(f"/api/artists/{artist_id}/discography/add-all").json()
+    assert first["jobs_enqueued"] == 1
+
+    from app.queue.pipeline import Pipeline
+    from app.queue.service import QueueService
+    queue = QueueService()
+    pipeline = Pipeline(queue, resolver=resolver)
+    with Session(engine) as session:
+        job = session.exec(select(QueueItem).where(QueueItem.job_type == JobType.album_add)).one()
+    await pipeline.process(job)
+
+    with Session(engine) as session:
+        job = session.get(QueueItem, job.id)
+        assert job.status.value == "done", job.error_message
+        albums = session.exec(select(Album).where(Album.artist_id == artist_id)).all()
+        # Persisted under the RELEASE's title, not the release-group's.
+        assert {a.title for a in albums} == {"Hybrid Theory"}
+
+    # The bug: a title-string check comparing against "Hybrid Theory (20th
+    # anniversary edition)" (the release-group's browse title) never
+    # matches the persisted "Hybrid Theory" album, so it re-enqueues
+    # forever. The fix must recognise this release-group as handled via
+    # its own job history, regardless of the title mismatch.
+    second = client.post(f"/api/artists/{artist_id}/discography/add-all").json()
+    assert second["jobs_enqueued"] == 0, (
+        "retried a release-group whose canonical release title differs from "
+        "its browse-time title — this would re-pay full resolve cost forever"
+    )
+    assert second["already_in_library"] == 1

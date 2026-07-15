@@ -39,6 +39,13 @@ class AudioSource(str, Enum):
 class JobType(str, Enum):
     metadata_resolve = "metadata_resolve"
     download = "download"
+    # Post-audit (2026-07-15, Section 11 item 15): one release from Artist
+    # Detail's bulk "Add entire discography" — resolves + persists + enqueues
+    # downloads for one album via the same _add_album() a manual single-album
+    # add uses, but off the request/response cycle so the endpoint returns
+    # immediately and bulk adds don't head-of-line-block interactive search
+    # behind the shared MusicBrainz rate limiter.
+    album_add = "album_add"
 
 
 class JobStatus(str, Enum):
@@ -120,6 +127,11 @@ class QueueItem(SQLModel, table=True):
     # Extension over the Section 5 field list (flagged in Section 11): the
     # per-download output format travels with the job like the quality does.
     requested_format: Optional[str] = None
+    # Extension (Section 11 item 15, post-audit): JSON-encoded ResolvedAlbum
+    # for an album_add job — a QueueItem carries no track_id yet at this
+    # stage (no Track/Album rows exist until _add_album persists them), so
+    # the job needs to carry its own payload rather than pointing at one.
+    payload: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None

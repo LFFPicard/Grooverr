@@ -4,6 +4,7 @@ and startup recovery. All methods are synchronous and fast (local SQLite in
 WAL mode); workers call them directly from the event loop, which also makes
 job claiming race-free — claims never yield mid-transaction.
 """
+import json
 from datetime import datetime
 from typing import Optional
 
@@ -124,6 +125,38 @@ class QueueService:
             track = session.get(Track, track_id)
             hub.publish("queue_update", _job_event(job, track.title if track else None))
             job_id = job.id
+        self.wake.set()
+        return job_id
+
+    def enqueue_album_add(
+        self,
+        resolved_album_json: str,
+        quality: Optional[str] = None,
+        output_format: Optional[str] = None,
+    ) -> str:
+        """One release from a bulk 'Add entire discography' run (Section
+        11 item 15, post-audit). No track_id yet — resolved_album_json is
+        the full ResolvedAlbum payload from the discography browse, so the
+        worker can call the same _add_album() a manual add uses without
+        re-fetching anything already known at enqueue time."""
+        try:
+            album_title = json.loads(resolved_album_json).get("title")
+        except (ValueError, AttributeError):
+            album_title = None
+
+        with Session(engine) as session:
+            job = QueueItem(
+                track_id=None,
+                job_type=JobType.album_add,
+                priority=PRIORITY_RESOLVE,
+                requested_quality=quality,
+                requested_format=output_format,
+                payload=resolved_album_json,
+            )
+            session.add(job)
+            session.commit()
+            job_id = job.id
+            hub.publish("queue_update", _job_event(job, track_title=album_title))
         self.wake.set()
         return job_id
 
@@ -302,7 +335,12 @@ class QueueService:
 
     @staticmethod
     def _track_title(session: Session, job: QueueItem) -> Optional[str]:
-        if not job.track_id:
-            return None
-        track = session.get(Track, job.track_id)
-        return track.title if track else None
+        if job.track_id:
+            track = session.get(Track, job.track_id)
+            return track.title if track else None
+        if job.job_type == JobType.album_add and job.payload:
+            try:
+                return json.loads(job.payload).get("title")
+            except (ValueError, AttributeError):
+                return None
+        return None

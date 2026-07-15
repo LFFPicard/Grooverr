@@ -52,6 +52,7 @@ def init_db():
         _ensure_column(connection, "track", "youtube_video_id", "youtube_video_id VARCHAR")
         _ensure_column(connection, "playlist", "m3u_path", "m3u_path VARCHAR")
         _ensure_column(connection, "playlist", "m3u_generated_at", "m3u_generated_at DATETIME")
+        _ensure_column(connection, "queueitem", "payload", "payload VARCHAR")
 
 
 def get_session():
