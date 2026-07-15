@@ -32,12 +32,22 @@ _ILLEGAL_CHARS = re.compile(r'[/\\:*?"<>|]')
 _CONTROL_CHARS = re.compile(r"[\x00-\x1f]")
 _TOKEN = re.compile(r"\{([A-Za-z]+-?)\}")
 
+# Per-component length cap (full-audit finding 2026-07-15): a legitimately
+# long track title (~300 chars — they exist) rendered a path component past
+# the filesystem's per-name limit and every such download failed at file
+# placement with OSError. 120 chars leaves ample headroom inside the
+# universal 255-per-component limit for the template's own decoration
+# ("01 - ", " (2013)", ".flac") — the same pragmatic truncation Picard does.
+MAX_COMPONENT_LENGTH = 120
+
 
 def sanitize_component(value: str) -> str:
     """Make a single path component (folder or file name) filesystem-safe."""
     value = _ILLEGAL_CHARS.sub("-", value)
     value = _CONTROL_CHARS.sub(" ", value)
     value = " ".join(value.split())          # collapse runs of whitespace
+    if len(value) > MAX_COMPONENT_LENGTH:
+        value = value[:MAX_COMPONENT_LENGTH].rstrip()
     value = value.strip(". ")                # Windows: no trailing dots/spaces
     return value or "_"
 

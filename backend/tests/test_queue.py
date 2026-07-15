@@ -63,9 +63,12 @@ class FakeDownloader:
 
     async def download_track(self, track, output_format="mp3", quality_kbps=None,
                              album_artist=None, multi_disc=None, match=None,
-                             progress_callback=None):
+                             progress_callback=None, path_template=None,
+                             duration_tolerance_seconds=None):
         self.calls.append({"track": track, "format": output_format,
-                           "quality": quality_kbps, "multi_disc": multi_disc})
+                           "quality": quality_kbps, "multi_disc": multi_disc,
+                           "path_template": path_template,
+                           "tolerance": duration_tolerance_seconds})
         if self.delay:
             await asyncio.sleep(self.delay)
         if self.fail:
@@ -277,6 +280,72 @@ async def test_download_completion_regenerates_member_playlist_m3u(clean_db):
         content = open(playlist.m3u_path, encoding="utf-8").read()
         assert track.file_path in content
         assert "#EXTM3U" in content
+
+
+async def test_m3u_regeneration_survives_concurrent_download_burst(clean_db):
+    """Full-audit check (2026-07-15, brief P2): a playlist spanning several
+    concurrently-downloading albums must end the burst with a complete,
+    well-formed manifest — every downloaded member present, in position
+    order, no interleaved/truncated content. Regens fire once per completed
+    track from three workers at once; the last one must see all 12."""
+    queue = QueueService()
+    downloader = FakeDownloader(delay=0.02)   # keep several jobs in flight together
+    pipeline = Pipeline(queue, resolver=FakeResolver(), downloader=downloader)
+
+    track_ids = []
+    with Session(engine) as session:
+        playlist = Playlist(name="Burst Playlist")
+        session.add(playlist)
+        session.flush()
+        for album_n in range(3):
+            artist = Artist(name=f"Burst Artist {album_n}")
+            session.add(artist)
+            session.flush()
+            album = Album(artist_id=artist.id, title=f"Burst Album {album_n}")
+            session.add(album)
+            session.flush()
+            for n in range(4):
+                position = album_n * 4 + n + 1
+                track = Track(
+                    album_id=album.id,
+                    title=f"Burst Track {position:02d}",
+                    status=TrackStatus.queued,
+                )
+                session.add(track)
+                session.flush()
+                session.add(PlaylistTrack(
+                    playlist_id=playlist.id, track_id=track.id, position=position,
+                ))
+                track_ids.append(track.id)
+        session.commit()
+        playlist_id = playlist.id
+
+    for track_id in track_ids:
+        queue.enqueue_download(track_id)
+
+    await run_pool_until(
+        queue, pipeline,
+        lambda: all(get_track(t).status == TrackStatus.downloaded for t in track_ids),
+        concurrency=3,
+    )
+
+    with Session(engine) as session:
+        playlist = session.get(Playlist, playlist_id)
+        content = open(playlist.m3u_path, encoding="utf-8").read()
+    lines = content.strip().splitlines()
+    assert lines[0] == "#EXTM3U"
+    entry_titles = [
+        line.split(",", 1)[1] for line in lines if line.startswith("#EXTINF")
+    ]
+    expected = [
+        f"Burst Artist {(p - 1) // 4} - Burst Track {p:02d}" for p in range(1, 13)
+    ]
+    assert entry_titles == expected, (
+        f"manifest incomplete or out of order after concurrent burst: {entry_titles}"
+    )
+    # No stray .tmp file left behind by the atomic-replace write.
+    from pathlib import Path as _P
+    assert not list(_P(playlist.m3u_path).parent.glob("*.tmp"))
 
 
 async def test_download_failure_lands_on_track_and_job(clean_db):

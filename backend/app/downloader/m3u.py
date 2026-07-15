@@ -83,7 +83,13 @@ def write_m3u(path: Path, entries: list[M3UEntry]) -> None:
         relative = Path(relative).as_posix()
         lines.append(f"#EXTINF:{duration},{label}")
         lines.append(relative)
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    # Atomic replace: the manifest lives on the music share, where Plex/
+    # Navidrome may scan it at any moment — a plain truncate-and-write
+    # would expose a half-written file mid-regeneration (full-audit
+    # finding 2026-07-15). os.replace is atomic on POSIX and Windows.
+    tmp = path.with_suffix(".m3u8.tmp")
+    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def regenerate_playlist_m3u(session: Session, playlist: Playlist) -> None:

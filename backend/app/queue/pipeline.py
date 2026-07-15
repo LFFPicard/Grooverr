@@ -187,6 +187,12 @@ class Pipeline:
         elif get_setting("default_quality_ceiling"):
             quality = int(get_setting("default_quality_ceiling"))
         output_format = job.requested_format or get_setting("default_output_format") or "mp3"
+        # Read per job, like quality/format above — Settings changes must
+        # apply to the next download, not freeze at engine construction
+        # (full-audit finding 2026-07-15; same bug class as the Batch 8
+        # user-agent fix).
+        path_template = get_setting("output_path_template") or None
+        tolerance = get_setting("duration_tolerance_seconds")
 
         job_id = job.id
         try:
@@ -196,6 +202,8 @@ class Pipeline:
                 quality_kbps=quality,
                 multi_disc=multi_disc,
                 progress_callback=lambda pct: self.queue.update_progress(job_id, pct),
+                path_template=path_template,
+                duration_tolerance_seconds=tolerance if isinstance(tolerance, int) else None,
             )
         except DownloadFailure as exc:
             self._mark_track_error(job.track_id, str(exc))

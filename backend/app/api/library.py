@@ -288,8 +288,13 @@ async def _resolve_full_album(resolved_album: ResolvedAlbum) -> ResolvedAlbum:
         releases = await runtime.resolver.mb.browse_releases_by_release_group(
             resolved_album.release_group_id
         )
-        if releases:
-            best = max(releases, key=_release_rank)
+        # Safe .get() only — a release entry with no id (malformed payload)
+        # must fall through to the 502 below, not raise a raw KeyError
+        # (Batch 2 hard rule; a KeyError here would also abort an entire
+        # bulk add-all run, since that loop only catches HTTPException).
+        candidates = [r for r in releases if r.get("id")]
+        if candidates:
+            best = max(candidates, key=_release_rank)
             release = await runtime.resolver.mb.get_release(best["id"])
             full = runtime.resolver.mb.parse_release(release)
     elif resolved_album.youtube_browse_id or resolved_album.youtube_playlist_id:

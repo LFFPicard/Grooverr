@@ -107,15 +107,27 @@ class DownloadEngine:
         multi_disc: Optional[bool] = None,
         match: Optional[AudioMatch] = None,
         progress_callback: Optional[Callable[[int], None]] = None,
+        path_template: Optional[str] = None,
+        duration_tolerance_seconds: Optional[int] = None,
     ) -> DownloadResult:
         """Download, tag and place one track. `multi_disc` drives the
         Section 6 disc-prefix rule; when the caller doesn't know the album's
-        disc count it defaults to True only if the track sits on disc 2+."""
+        disc count it defaults to True only if the track sits on disc 2+.
+
+        `path_template` / `duration_tolerance_seconds` are per-call
+        overrides so the queue pipeline can apply the current Settings
+        values on every job (like quality/format) rather than freezing the
+        constructor values in at startup — the Batch 8 user-agent lesson."""
         warnings: list[str] = []
+        tolerance = (
+            duration_tolerance_seconds
+            if duration_tolerance_seconds is not None
+            else self.duration_tolerance_seconds
+        )
 
         if match is None:
             match = await asyncio.to_thread(
-                find_audio_source, self.yt, track, self.duration_tolerance_seconds
+                find_audio_source, self.yt, track, tolerance
             )
         if match is None:
             raise DownloadFailure(
@@ -137,7 +149,7 @@ class DownloadEngine:
             disc_number=track.disc_number,
             release_year=track.release_year,
             multi_disc=multi_disc,
-            template=self.path_template,
+            template=path_template or self.path_template,
         )
 
         cover = await self._fetch_cover(track, warnings)
