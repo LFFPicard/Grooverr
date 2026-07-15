@@ -120,3 +120,71 @@ async def test_concurrent_search_and_discography_browse_share_rate_limit(monkeyp
         "— the shared rate limiter did not correctly serialize both"
     )
     assert elapsed >= 2.9  # 4 requests at ~1s spacing must take ~3s, not run in parallel
+
+
+async def test_concurrent_search_and_worker_resolve_share_rate_limit(monkeypatch):
+    """Batch 10's exact DoD scenario, distinct from the browse test above:
+    an interactive search fired while a multi-track metadata_resolve job
+    (Section 7.2's worker — Pipeline._resolve, which calls
+    resolver.resolve_track exactly like this) is mid-flight for several
+    tracks at once, e.g. from a playlist import. Uses MetadataResolver
+    directly (the same object Pipeline._resolve calls through
+    self.resolver.resolve_track), not the lower-level MusicBrainzClient, so
+    this exercises the actual worker code path rather than a stand-in."""
+    request_log: list[tuple[float, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        request_log.append((time.monotonic(), request.url.path))
+        if request.url.path == "/ws/2/recording":
+            return httpx.Response(
+                200, json={"recordings": [{"id": "r1", "title": "T", "score": 100}]}
+            )
+        return httpx.Response(200, json={})
+
+    mb_client = MusicBrainzClient(
+        client=httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), headers={"User-Agent": "test"}
+        ),
+        rate_limit_seconds=1.0,
+    )
+    from app.resolver.engine import MetadataResolver
+
+    resolver = MetadataResolver(musicbrainz=mb_client, ytmusic=FakeYT())
+    monkeypatch.setattr(runtime.resolver, "mb", mb_client)
+    monkeypatch.setattr(runtime.resolver, "yt", FakeYT())
+
+    async def interactive_search():
+        await search_module.search(q="some other track", mode="title")
+
+    async def worker_resolve_job(track_title: str):
+        # Mirrors Pipeline._resolve calling self.resolver.resolve_track for
+        # one queued metadata_resolve job. Three of these running together
+        # is what a multi-track playlist/album import looks like in the
+        # worker pool (Section 9.3: concurrency limit 3).
+        await resolver.resolve_track(track_title, artist="Some Artist")
+
+    start = time.monotonic()
+    await asyncio.gather(
+        interactive_search(),
+        worker_resolve_job("Track One"),
+        worker_resolve_job("Track Two"),
+        worker_resolve_job("Track Three"),
+    )
+    elapsed = time.monotonic() - start
+    await mb_client.close()
+
+    request_log.sort(key=lambda entry: entry[0])
+    print("\nConcurrent MusicBrainz request log (search + 3 worker resolve jobs, shared client):")
+    for t, path in request_log:
+        print(f"  t+{t - start:.3f}s  {path}")
+    gaps = [b - a for (a, _), (b, _) in zip(request_log, request_log[1:])]
+    print(f"Gaps between consecutive requests: {[f'{g:.3f}s' for g in gaps]}")
+
+    # search path fires 1 request; each worker resolve job fires 1 request
+    # (only_official_studio hit is non-empty, so no second fallback pass).
+    assert len(request_log) == 4
+    assert all(gap >= 0.95 for gap in gaps), (
+        f"A search request and a worker resolve-job request fired {min(gaps):.3f}s apart "
+        "— the shared rate limiter did not correctly serialize the worker pipeline with search"
+    )
+    assert elapsed >= 2.9
