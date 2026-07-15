@@ -4,6 +4,17 @@ import { useAddEntireDiscography, useArtistDiscography } from '../api/hooks'
 import { DiscographyCard } from '../components/DiscographyCard'
 import { VirtualizedCardGrid } from '../components/VirtualizedCardGrid'
 
+// Section 7.1.1 (strengthened 2026-07-15): segmented filter tabs, same
+// pattern as Library's Albums/Playlists tabs — a mixed 10+ release
+// discography is unnavigable with only the per-card corner badge.
+const TYPE_TABS = [
+  { key: 'all', label: 'All' },
+  { key: 'album', label: 'Album' },
+  { key: 'single', label: 'Single' },
+  { key: 'ep', label: 'EP' },
+  { key: 'compilation', label: 'Compilation' },
+]
+
 function AddEntireDiscographyButton({ artistId }) {
   const mutation = useAddEntireDiscography()
   const [result, setResult] = useState(null)
@@ -48,6 +59,12 @@ export default function ArtistDetail() {
   const total = data?.pages[0]?.total
   const artistName = items[0]?.album.artist_name
 
+  const [typeTab, setTypeTab] = useState('all')
+  const filteredItems = useMemo(
+    () => (typeTab === 'all' ? items : items.filter((item) => item.album.album_type === typeTab)),
+    [items, typeTab]
+  )
+
   return (
     <div>
       <Link to="/search" className="text-[0.8rem] text-text-faint hover:text-text mb-5 inline-block">
@@ -65,15 +82,35 @@ export default function ArtistDetail() {
         {items.length > 0 && <AddEntireDiscographyButton artistId={artistId} />}
       </div>
 
+      <div className="flex items-center gap-2 mb-6">
+        {TYPE_TABS.map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setTypeTab(t.key)}
+            className={`text-[0.85rem] font-medium px-4 py-2 rounded-full transition-colors ${
+              typeTab === t.key
+                ? 'text-plum bg-plum-tint font-semibold'
+                : 'text-text-dim bg-panel-sunken border border-border hover:text-text'
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
       <VirtualizedCardGrid
-        items={items}
+        items={filteredItems}
         isLoading={isLoading}
         isError={isError}
         hasNextPage={hasNextPage}
         isFetchingNextPage={isFetchingNextPage}
         fetchNextPage={fetchNextPage}
         renderCard={(item) => <DiscographyCard key={item.release_group_id} item={item} />}
-        emptyMessage="No official releases found for this artist on MusicBrainz."
+        emptyMessage={
+          typeTab === 'all'
+            ? "No official releases found for this artist on MusicBrainz."
+            : `No ${typeTab === 'ep' ? 'EPs' : typeTab + 's'} found for this artist.`
+        }
         errorMessage="Could not load this artist's discography."
       />
     </div>

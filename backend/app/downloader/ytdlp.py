@@ -86,12 +86,13 @@ def download_audio(
         )
 
     dest_dir.mkdir(parents=True, exist_ok=True)
-    # Quality ceiling: prefer a source stream at/below the ceiling, fall back
-    # to best available; the ceiling is also applied at the ffmpeg re-encode
-    # for lossy targets.
+    # Broad fallback selector, no bitrate/codec/container constraint at this
+    # stage (resolved 2026-07-15): a selector filtered by abr/codec here
+    # caused "Requested format is not available" on every download tested,
+    # since YouTube's actually-available formats vary per video and drift
+    # over time. Grab whatever the best audio stream is; the quality
+    # ceiling is enforced downward-only during the ffmpeg re-encode below.
     fmt = "bestaudio/best"
-    if quality_kbps:
-        fmt = f"bestaudio[abr<={quality_kbps}]/{fmt}"
 
     postprocessor = {
         "key": "FFmpegExtractAudio",
