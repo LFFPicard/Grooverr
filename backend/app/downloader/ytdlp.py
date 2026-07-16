@@ -4,6 +4,7 @@ converts to the target output format via ffmpeg.
 
 Blocking (yt-dlp is sync); the engine wraps calls in asyncio.to_thread.
 """
+import logging
 import os
 import shutil
 from pathlib import Path
@@ -12,6 +13,8 @@ from typing import Callable, Optional
 import yt_dlp
 
 from app.settings_store import config_dir
+
+logger = logging.getLogger("grooverr.ytdlp")
 
 # Output format → yt-dlp FFmpegExtractAudio codec name.
 _CODEC_BY_FORMAT = {
@@ -114,18 +117,36 @@ def download_audio(
     if cookies_path == "unset":
         cookies_path = resolve_cookies_path()
 
+    # TEMPORARY (Section 11 item 20 investigation): GROOVERR_YTDLP_VERBOSE
+    # unsilences yt-dlp's own client-selection/warning output, which
+    # "quiet"/"no_warnings" normally suppress from ever reaching the
+    # container logs — exactly the output needed to see which client a real
+    # pipeline download actually lands on, not just what the options say.
+    _diag_verbose = os.environ.get("GROOVERR_YTDLP_VERBOSE") == "1"
     options = {
         "format": fmt,
         "outtmpl": str(dest_dir / "%(id)s.%(ext)s"),
         "postprocessors": [postprocessor],
         "ffmpeg_location": ffmpeg_path,
         "noplaylist": True,
-        "quiet": True,
-        "no_warnings": True,
+        "quiet": not _diag_verbose,
+        "no_warnings": not _diag_verbose,
+        "verbose": _diag_verbose,
         "noprogress": True,
     }
     if cookies_path:
         options["cookiefile"] = cookies_path
+    # Section 11 item 20: logged at DEBUG so it's available on demand
+    # (bump the app's log level, or set GROOVERR_YTDLP_VERBOSE=1 below for
+    # yt-dlp's own internal client-selection log too) without being noisy
+    # in steady-state operation. Exists because every prior investigation
+    # round diffed source code against a bare CLI command rather than what
+    # the pipeline actually constructs — this makes that check a log line
+    # instead of a multi-round diagnostic effort.
+    logger.debug(
+        "yt-dlp invocation for %s: format=%r cookiefile=%r full_options=%r",
+        video_id, options.get("format"), options.get("cookiefile"), options,
+    )
     if progress_callback is not None:
         # Transfer maps to 0-95%; the last 5% is the ffmpeg conversion.
         # Invoked on yt-dlp's worker thread — callbacks must be thread-safe.
@@ -143,11 +164,26 @@ def download_audio(
         options["progress_hooks"] = [hook]
 
     url = f"https://www.youtube.com/watch?v={video_id}"
+    ydl = yt_dlp.YoutubeDL(options)
     try:
-        with yt_dlp.YoutubeDL(options) as ydl:
-            ydl.download([url])
+        ydl.download([url])
     except yt_dlp.utils.DownloadError as exc:
         raise YtdlpDownloadError(f"yt-dlp failed for {video_id}: {exc}") from exc
+    finally:
+        # Section 11 item 20 investigation: when a cookiefile is configured,
+        # yt-dlp unconditionally tries to persist rotated cookies back to it
+        # on close — a write failure there (e.g. a config-volume permission
+        # mismatch) raised a raw, uncaught PermissionError that discarded an
+        # already-fully-successful download and surfaced a misleading error.
+        # Losing cookie-rotation persistence is a much smaller problem than
+        # throwing away a completed download over it.
+        try:
+            ydl.close()
+        except Exception:
+            logger.warning(
+                "yt-dlp cleanup (cookiejar write-back) failed for %s — not "
+                "treated as a download failure", video_id, exc_info=True,
+            )
 
     result = dest_dir / f"{video_id}.{output_format}"
     if not result.is_file():
