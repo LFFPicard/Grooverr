@@ -24,7 +24,10 @@ jobs:
 
       - name: Extract image metadata
         id: meta
-        uses: docker/metadata-action@v5
+        # v5 began hard-failing on 2026-07-16 with no repo-side change (two
+        # consecutive runs, config identical to a same-day success) — v5's
+        # deprecated Node runtime vs. v6's Node 24 on current runners.
+        uses: docker/metadata-action@v6
         with:
           images: lffpicard/grooverr
           tags: |
