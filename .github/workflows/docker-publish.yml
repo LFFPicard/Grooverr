@@ -22,18 +22,28 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Extract image metadata
+      # Replaced docker/metadata-action (2026-07-16): its repo-metadata
+      # GitHub API call returned server-side 500s ("Unicorn" pages, visible
+      # in the failed runs' check annotations) across four consecutive
+      # builds on both v5 and v6, taking image publishing down with it.
+      # The tag set this project needs — latest on master, short SHA
+      # always, version on v* tags — is trivially computable in shell with
+      # zero API dependencies, so a GitHub API wobble can never block a
+      # publish again. The action's other output (auto-generated OCI
+      # labels from repo metadata) was cosmetic; the Dockerfile carries
+      # its own LABELs.
+      - name: Compute image tags
         id: meta
-        # v5 began hard-failing on 2026-07-16 with no repo-side change (two
-        # consecutive runs, config identical to a same-day success) — v5's
-        # deprecated Node runtime vs. v6's Node 24 on current runners.
-        uses: docker/metadata-action@v6
-        with:
-          images: lffpicard/grooverr
-          tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=semver,pattern={{version}}
-            type=sha,prefix=,format=short
+        run: |
+          IMAGE=lffpicard/grooverr
+          TAGS="$IMAGE:${GITHUB_SHA::7}"
+          if [ "$GITHUB_REF" = "refs/heads/master" ]; then
+            TAGS="$TAGS,$IMAGE:latest"
+          fi
+          case "$GITHUB_REF" in
+            refs/tags/v*) TAGS="$TAGS,$IMAGE:${GITHUB_REF#refs/tags/v}" ;;
+          esac
+          echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
 
       # Version footer (Section 8 Settings screen, Batch 9, Section 11 item
       # 19): github.sha is available directly for the commit SHA, no extra
@@ -49,7 +59,6 @@ jobs:
           context: .
           push: true
           tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             GIT_SHA=${{ github.sha }}
             BUILD_DATE=${{ steps.build_date.outputs.date }}
