@@ -50,7 +50,7 @@ paths (`/path/to/your/music`, `/path/to/appdata/Grooverr`) are placeholders.
 1. In the CA app store, search for **Grooverr**. (Until the template is
    accepted into the official CA index, add it manually: **Apps → Template
    URL**, paste
-   `https://raw.githubusercontent.com/LFFPicard/Grooverr/main/unraid/grooverr.xml`.)
+   `https://raw.githubusercontent.com/LFFPicard/Grooverr/master/unraid/grooverr.xml`.)
 2. Set **Music** to your existing music share (e.g. `/mnt/user/music/`).
 3. Set **Config** to a dedicated appdata folder (e.g.
    `/mnt/user/appdata/grooverr/`) — never point this at the same path as

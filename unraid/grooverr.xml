@@ -12,7 +12,7 @@
   <Overview>Grooverr is a self-hosted music acquisition and library manager. Point it at an artist, album, track, or YouTube Music playlist and it resolves metadata against MusicBrainz, downloads audio via YouTube Music, converts to your chosen format (mp3/flac/m4a/opus/wav/ogg), tags it with the correct MBIDs and embedded cover art, and files it into your library using a clean, consistent naming convention. A live queue shows resolving and downloading jobs separately, and the whole thing is designed to stay fast even with a library in the thousands of tracks. Single-user, no accounts, no Spotify dependency.&#10;&#10;Point Music to your existing library share and Config to a dedicated appdata folder, set PUID/PGID to match your library's ownership, then finish setup (MusicBrainz user-agent, optional YouTube cookie file, default quality, output path template) from the Settings screen in the WebUI.</Overview>
   <Category>MediaApp:Music</Category>
   <WebUI>http://[IP]:[PORT:8000]/</WebUI>
-  <TemplateURL>https://raw.githubusercontent.com/LFFPicard/Grooverr/main/unraid/grooverr.xml</TemplateURL>
+  <TemplateURL>https://raw.githubusercontent.com/LFFPicard/Grooverr/master/unraid/grooverr.xml</TemplateURL>
   <Icon>https://raw.githubusercontent.com/LFFPicard/Grooverr/master/design/icon.png</Icon>
   <ExtraParams/>
   <PostArgs/>
