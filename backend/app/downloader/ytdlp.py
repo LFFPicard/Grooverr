@@ -164,26 +164,55 @@ def download_audio(
         options["progress_hooks"] = [hook]
 
     url = f"https://www.youtube.com/watch?v={video_id}"
-    ydl = yt_dlp.YoutubeDL(options)
-    try:
-        ydl.download([url])
-    except yt_dlp.utils.DownloadError as exc:
-        raise YtdlpDownloadError(f"yt-dlp failed for {video_id}: {exc}") from exc
-    finally:
-        # Section 11 item 20 investigation: when a cookiefile is configured,
-        # yt-dlp unconditionally tries to persist rotated cookies back to it
-        # on close — a write failure there (e.g. a config-volume permission
-        # mismatch) raised a raw, uncaught PermissionError that discarded an
-        # already-fully-successful download and surfaced a misleading error.
-        # Losing cookie-rotation persistence is a much smaller problem than
-        # throwing away a completed download over it.
+
+    def _invoke(opts: dict) -> None:
+        ydl = yt_dlp.YoutubeDL(opts)
         try:
-            ydl.close()
-        except Exception:
+            ydl.download([url])
+        except yt_dlp.utils.DownloadError as exc:
+            raise YtdlpDownloadError(f"yt-dlp failed for {video_id}: {exc}") from exc
+        finally:
+            # Section 11 item 20: when a cookiefile is configured, yt-dlp
+            # unconditionally tries to persist rotated cookies back to it on
+            # close — a write failure there (e.g. a config-volume permission
+            # mismatch) raised a raw, uncaught PermissionError that discarded
+            # an already-fully-successful download. Losing cookie-rotation
+            # persistence is a much smaller problem than throwing away a
+            # completed download over it.
+            try:
+                ydl.close()
+            except Exception:
+                logger.warning(
+                    "yt-dlp cleanup (cookiejar write-back) failed for %s — not "
+                    "treated as a download failure", video_id, exc_info=True,
+                )
+
+    try:
+        _invoke(options)
+    except YtdlpDownloadError as exc:
+        # Section 11 item 21: valid account cookies (LOGIN_INFO + SAPISID)
+        # flip yt-dlp's is_authenticated, which swaps the client list from
+        # _DEFAULT_CLIENTS (android_vr — direct URLs, no PO token, no JS
+        # player) to _DEFAULT_AUTHED_CLIENTS (tv_downgraded + web_safari —
+        # both currently format-gated: SABR/missing URLs on web_safari,
+        # unsolved signature ciphers on tv_downgraded). Net result: zero
+        # usable formats and "Requested format is not available" on EVERY
+        # video, while the identical cookie-less invocation succeeds.
+        # Fallback: retry once without cookies — the cookie-less client
+        # path is the proven-working one, and a successful anonymous
+        # download beats a failed authenticated one.
+        if "cookiefile" in options and "Requested format is not available" in str(exc):
             logger.warning(
-                "yt-dlp cleanup (cookiejar write-back) failed for %s — not "
-                "treated as a download failure", video_id, exc_info=True,
+                "Download of %s failed with 'Requested format is not "
+                "available' while using the configured YouTube cookies — "
+                "retrying once without cookies (yt-dlp selects different, "
+                "currently format-restricted clients for authenticated "
+                "sessions)", video_id,
             )
+            retry_options = {k: v for k, v in options.items() if k != "cookiefile"}
+            _invoke(retry_options)
+        else:
+            raise
 
     result = dest_dir / f"{video_id}.{output_format}"
     if not result.is_file():
