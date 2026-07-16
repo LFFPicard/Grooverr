@@ -21,6 +21,7 @@ from app.api.playlists import router as playlists_router
 from app.api.search import router as search_router
 from app.api.settings import router as settings_router
 from app.api.stats import router as stats_router
+from app.api.version import router as version_router
 from app.db import init_db
 from app.queue import WorkerPool, hub
 from app.queue.pipeline import Pipeline
@@ -61,6 +62,7 @@ app.include_router(settings_router)
 app.include_router(stats_router)
 app.include_router(activity_router)
 app.include_router(playlists_router)
+app.include_router(version_router)
 
 
 @app.get("/api/health")

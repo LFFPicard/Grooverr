@@ -2,7 +2,7 @@ name: Build and publish Docker image
 
 on:
   push:
-    branches: [main]
+    branches: [master]
     tags: ["v*"]
   workflow_dispatch:
 
@@ -32,6 +32,14 @@ jobs:
             type=semver,pattern={{version}}
             type=sha,prefix=,format=short
 
+      # Version footer (Section 8 Settings screen, Batch 9, Section 11 item
+      # 19): github.sha is available directly for the commit SHA, no extra
+      # step needed for that — but the build timestamp genuinely has to be
+      # computed at workflow-run time, hence this one step.
+      - name: Set build date
+        id: build_date
+        run: echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
@@ -39,5 +47,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            BUILD_DATE=${{ steps.build_date.outputs.date }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

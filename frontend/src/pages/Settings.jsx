@@ -6,6 +6,7 @@ import {
   useSettings,
   useUpdateSettings,
   useUploadCookies,
+  useVersion,
 } from '../api/hooks'
 import { useTheme } from '../hooks/useTheme'
 
@@ -149,6 +150,19 @@ function PathTemplateEditor({ value, onChange }) {
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+function VersionFooter() {
+  const { data } = useVersion()
+  if (!data) return null
+  const shortSha = data.git_sha.slice(0, 7)
+  const buildDate = data.build_date ? new Date(data.build_date).toLocaleString() : null
+  return (
+    <div className="text-[0.72rem] text-text-faint text-center mt-6 mb-2">
+      Grooverr · build {shortSha}
+      {buildDate && ` · ${buildDate}`}
     </div>
   )
 }
@@ -301,6 +315,8 @@ export default function Settings() {
           <span className="text-[0.82rem] text-danger">{saveResult.message}</span>
         )}
       </div>
+
+      <VersionFooter />
     </form>
   )
 }

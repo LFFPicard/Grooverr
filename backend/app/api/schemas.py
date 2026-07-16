@@ -234,3 +234,14 @@ class StatsOut(BaseModel):
     library_albums: int
     incomplete_albums: int
     errored_jobs: int
+
+
+# ── Version (Section 8 Settings footer, Batch 9, Section 11 item 19) ───────
+
+class VersionOut(BaseModel):
+    """Baked into the image at Docker build time — never computed at
+    runtime, which would show the same value regardless of what commit is
+    actually running. Local dev (no baked file) falls back to a clearly
+    labeled placeholder rather than pretending to be a real build."""
+    git_sha: str
+    build_date: Optional[str] = None

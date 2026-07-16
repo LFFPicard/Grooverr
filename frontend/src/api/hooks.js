@@ -346,6 +346,17 @@ export function useDeleteCookies() {
   })
 }
 
+// Section 8 Settings footer / Batch 9 / Section 11 item 19 — build-time-
+// baked commit SHA + build timestamp, so "is this actually the fix" is a
+// glance instead of a docker-exec diagnostic session.
+export function useVersion() {
+  return useQuery({
+    queryKey: ['version'],
+    queryFn: () => api.get('/api/version'),
+    staleTime: Infinity, // a running container's build can't change under it
+  })
+}
+
 /** Debounced live preview of the output path template — queryFn only
  * fires after `template` settles (Settings page debounces the input). */
 export function usePathPreview(template) {
