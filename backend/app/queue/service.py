@@ -308,6 +308,23 @@ class QueueService:
             hub.publish("queue_update", {"job": {"id": job_id, "status": "cancelled"}})
         return True
 
+    def clear(self, status: JobStatus) -> int:
+        """Bulk-remove QueueItem rows in a terminal state (Section 7.6:
+        "Clear failed" / "Clear completed"). Metadata-only — the caller
+        restricts `status` to error/done, since queued/active jobs must go
+        through cancel/retry instead. Never touches Track rows or files."""
+        with Session(engine) as session:
+            rows = session.exec(
+                select(QueueItem).where(QueueItem.status == status)
+            ).all()
+            count = len(rows)
+            for job in rows:
+                session.delete(job)
+            session.commit()
+        if count:
+            hub.publish("queue_update", {"cleared": {"status": status.value, "count": count}})
+        return count
+
     # ── Startup recovery (Section 7.5) ────────────────────────────────────
 
     def recover_stuck_jobs(self) -> int:

@@ -6,12 +6,13 @@ POST /api/queue/add          — add a track by title/artist(/album); kicks off
 GET  /api/queue              — list jobs (basic status/type filters)
 POST /api/queue/{id}/retry   — reset an errored job to queued
 DELETE /api/queue/{id}       — cancel a queued job
+POST /api/queue/clear        — bulk-remove error/done jobs (Section 7.6)
 GET  /api/queue/events       — SSE stream of queue state changes
 """
 import asyncio
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func
@@ -112,6 +113,16 @@ def cancel_job(job_id: str):
             409, "Only queued jobs can be cancelled (job may be active, finished, or missing)"
         )
     return {"status": "cancelled"}
+
+
+@router.post("/clear")
+def clear_jobs(status: JobStatus = Query(..., description="Only 'error' or 'done' may be bulk-cleared")):
+    """Section 7.6: "Clear failed" / "Clear completed" — queued/active jobs
+    must go through cancel/retry instead, never a bulk wipe."""
+    if status not in (JobStatus.error, JobStatus.done):
+        raise HTTPException(422, "Only 'error' or 'done' jobs can be bulk-cleared")
+    count = get_queue_service().clear(status)
+    return {"cleared": count, "status": status.value}
 
 
 @router.get("/events")

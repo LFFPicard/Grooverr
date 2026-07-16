@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
-import { useAlbumDetail, useCompleteAlbum } from '../api/hooks'
+import { Link, useNavigate, useParams } from 'react-router-dom'
+import { useAlbumDetail, useCompleteAlbum, useDeleteAlbum } from '../api/hooks'
+import { ConfirmDeleteModal } from '../components/ConfirmDeleteModal'
 import { TrackRow } from '../components/TrackRow'
 
 function CompleteAlbumButton({ albumId }) {
@@ -28,6 +29,36 @@ function CompleteAlbumButton({ albumId }) {
   )
 }
 
+function DeleteAlbumButton({ album }) {
+  const [open, setOpen] = useState(false)
+  const mutation = useDeleteAlbum()
+  const navigate = useNavigate()
+
+  return (
+    <>
+      <button
+        onClick={() => setOpen(true)}
+        className="btn bg-panel-sunken border border-border text-danger text-[0.8rem] px-3 py-1.5"
+      >
+        Delete album
+      </button>
+      <ConfirmDeleteModal
+        open={open}
+        busy={mutation.isPending}
+        title={`Delete “${album.title}”?`}
+        description="This removes the album and all its tracks from your library. Choose whether to also delete the real audio files from disk — this cannot be undone."
+        onCancel={() => setOpen(false)}
+        onConfirm={(deleteFiles) =>
+          mutation.mutate(
+            { albumId: album.id, deleteFiles },
+            { onSuccess: () => navigate('/library') }
+          )
+        }
+      />
+    </>
+  )
+}
+
 export default function AlbumDetail() {
   const { albumId } = useParams()
   const { data: album, isLoading, isError } = useAlbumDetail(albumId)
@@ -48,9 +79,12 @@ export default function AlbumDetail() {
 
   return (
     <div>
-      <Link to="/library" className="text-[0.8rem] text-text-faint hover:text-text mb-5 inline-block">
-        ← Library
-      </Link>
+      <div className="flex items-center justify-between mb-5">
+        <Link to="/library" className="text-[0.8rem] text-text-faint hover:text-text inline-block">
+          ← Library
+        </Link>
+        <DeleteAlbumButton album={album} />
+      </div>
 
       <div className="flex gap-6 mb-8">
         <div className="w-40 h-40 rounded-card bg-gradient-to-br from-plum-tint to-mustard-tint flex-shrink-0 overflow-hidden shadow-card dark:shadow-card-dark">

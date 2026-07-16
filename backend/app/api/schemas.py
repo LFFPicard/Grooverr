@@ -145,6 +145,17 @@ class CompleteAlbumResponse(BaseModel):
     queued_jobs: int
 
 
+# ── Removal & cleanup (Section 7.6) ─────────────────────────────────────────
+
+class DeleteResponse(BaseModel):
+    id: str
+    deleted: bool = True
+    files_deleted: bool = False
+    cascaded_tracks: int = 0
+    cascaded_albums: int = 0
+    affected_playlists: int = 0
+
+
 # ── Playlists (Section 5 Playlist/PlaylistTrack, Section 7.4) ──────────────
 
 class PlaylistSummary(BaseModel):

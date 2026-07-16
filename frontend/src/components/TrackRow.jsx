@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { useDownloadTrack } from '../api/hooks'
+import { useDeleteTrack, useDownloadTrack } from '../api/hooks'
+import { ConfirmDeleteModal } from './ConfirmDeleteModal'
 import { Pill } from './Pill'
 
 function formatDuration(seconds) {
@@ -49,11 +50,42 @@ function TrackAction({ track, albumId }) {
   )
 }
 
+function DeleteTrackAction({ track, albumId }) {
+  const [open, setOpen] = useState(false)
+  const mutation = useDeleteTrack()
+
+  return (
+    <>
+      <button
+        onClick={() => setOpen(true)}
+        title="Delete track"
+        aria-label="Delete track"
+        className="text-text-faint hover:text-danger text-[0.85rem] px-1.5"
+      >
+        ✕
+      </button>
+      <ConfirmDeleteModal
+        open={open}
+        busy={mutation.isPending}
+        title={`Delete “${track.title}”?`}
+        description="This removes the track from your library. Choose whether to also delete the real audio file from disk — this cannot be undone."
+        onCancel={() => setOpen(false)}
+        onConfirm={(deleteFiles) =>
+          mutation.mutate(
+            { trackId: track.id, albumId, deleteFiles },
+            { onSuccess: () => setOpen(false) }
+          )
+        }
+      />
+    </>
+  )
+}
+
 export function TrackRow({ track, albumId, multiDisc }) {
   const noArtwork = track.status === 'downloaded' && track.has_artwork === false
 
   return (
-    <div className="grid grid-cols-[48px_1fr_140px_100px] items-center gap-4 px-5 py-3 border-b border-border last:border-b-0">
+    <div className="grid grid-cols-[48px_1fr_140px_100px_28px] items-center gap-4 px-5 py-3 border-b border-border last:border-b-0">
       <div className="font-mono text-[0.78rem] text-text-faint">{trackNumberLabel(track, multiDisc)}</div>
       <div className="min-w-0">
         <div className="text-[0.87rem] font-semibold truncate">{track.title}</div>
@@ -73,6 +105,9 @@ export function TrackRow({ track, albumId, multiDisc }) {
       <div className="font-mono text-[0.8rem] text-text-dim">{formatDuration(track.duration_seconds)}</div>
       <div className="flex justify-end">
         <TrackAction track={track} albumId={albumId} />
+      </div>
+      <div className="flex justify-end">
+        <DeleteTrackAction track={track} albumId={albumId} />
       </div>
     </div>
   )

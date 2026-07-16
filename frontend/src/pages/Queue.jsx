@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useCancelJob, useQueueTab, useRetryJob } from '../api/hooks'
+import { useCancelJob, useClearJobs, useQueueTab, useRetryJob } from '../api/hooks'
 import { QueueRow } from '../components/QueueRow'
 
 const TABS = [
@@ -42,6 +42,38 @@ function JobActions({ job }) {
     )
   }
   return null
+}
+
+function ClearButtons() {
+  const clear = useClearJobs()
+  const [lastCleared, setLastCleared] = useState(null)
+
+  function handleClear(status) {
+    setLastCleared(null)
+    clear.mutate(status, {
+      onSuccess: (data) => setLastCleared(`${data.cleared} ${data.status} job${data.cleared === 1 ? '' : 's'} cleared`),
+    })
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      {lastCleared && <span className="text-[0.78rem] text-text-faint">{lastCleared}</span>}
+      <button
+        onClick={() => handleClear('error')}
+        disabled={clear.isPending}
+        className="btn bg-panel-sunken border border-border text-text text-[0.78rem] px-3 py-1.5 disabled:opacity-50"
+      >
+        Clear failed
+      </button>
+      <button
+        onClick={() => handleClear('done')}
+        disabled={clear.isPending}
+        className="btn bg-panel-sunken border border-border text-text text-[0.78rem] px-3 py-1.5 disabled:opacity-50"
+      >
+        Clear completed
+      </button>
+    </div>
+  )
 }
 
 export default function Queue() {
@@ -87,6 +119,7 @@ export default function Queue() {
             </option>
           ))}
         </select>
+        <ClearButtons />
       </div>
 
       <div className="bg-panel border border-border rounded-card overflow-hidden shadow-card dark:shadow-card-dark">

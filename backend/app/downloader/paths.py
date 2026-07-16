@@ -89,3 +89,21 @@ def render_track_path(
 
     rendered = _TOKEN.sub(lambda m: values.get(m.group(1), ""), template)
     return Path(rendered)
+
+
+def cleanup_empty_dirs(start_dir: Path, root: Path) -> None:
+    """Remove now-empty directories walking up from start_dir toward (but
+    never including) root. Used after a delete_files=true removal (Section
+    7.6) so deleting the last track of an album/artist doesn't leave an
+    empty Artist/Album (Year)/ folder behind in the music library."""
+    try:
+        root = root.resolve()
+        current = start_dir.resolve()
+    except OSError:
+        return
+    while current != root and root in current.parents:
+        try:
+            current.rmdir()  # only succeeds if the directory is empty
+        except OSError:
+            return
+        current = current.parent

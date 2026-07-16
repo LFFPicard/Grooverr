@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
-import { useAddEntireDiscography, useArtistDiscography } from '../api/hooks'
+import { Link, useNavigate, useParams } from 'react-router-dom'
+import { useAddEntireDiscography, useArtistDiscography, useDeleteArtist } from '../api/hooks'
+import { ConfirmDeleteModal } from '../components/ConfirmDeleteModal'
 import { DiscographyCard } from '../components/DiscographyCard'
 import { VirtualizedCardGrid } from '../components/VirtualizedCardGrid'
 
@@ -55,6 +56,36 @@ function AddEntireDiscographyButton({ artistId }) {
   )
 }
 
+function DeleteArtistButton({ artistId, artistName }) {
+  const [open, setOpen] = useState(false)
+  const mutation = useDeleteArtist()
+  const navigate = useNavigate()
+
+  return (
+    <>
+      <button
+        onClick={() => setOpen(true)}
+        className="btn bg-panel-sunken border border-border text-danger text-[0.8rem] px-3 py-1.5"
+      >
+        Delete artist
+      </button>
+      <ConfirmDeleteModal
+        open={open}
+        busy={mutation.isPending}
+        title={`Delete “${artistName || 'this artist'}”?`}
+        description="This removes the artist, every album, and every track from your library. Choose whether to also delete the real audio files from disk — this cannot be undone."
+        onCancel={() => setOpen(false)}
+        onConfirm={(deleteFiles) =>
+          mutation.mutate(
+            { artistId, deleteFiles },
+            { onSuccess: () => navigate('/library') }
+          )
+        }
+      />
+    </>
+  )
+}
+
 export default function ArtistDetail() {
   const { artistId } = useParams()
   const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading, isError } =
@@ -83,7 +114,10 @@ export default function ArtistDetail() {
             {typeof total === 'number' && ` ${total} release${total === 1 ? '' : 's'}.`}
           </div>
         </div>
-        {items.length > 0 && <AddEntireDiscographyButton artistId={artistId} />}
+        <div className="flex items-center gap-2">
+          <DeleteArtistButton artistId={artistId} artistName={artistName} />
+          {items.length > 0 && <AddEntireDiscographyButton artistId={artistId} />}
+        </div>
       </div>
 
       <div className="flex items-center gap-2 mb-6">

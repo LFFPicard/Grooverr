@@ -6,6 +6,7 @@ summary data only — the track list lives behind the separate, cheap album
 detail endpoint. Everything is paginated with server-side filtering.
 """
 import asyncio
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -19,16 +20,19 @@ from app.api.schemas import (
     AlbumSummary,
     ArtistOut,
     CompleteAlbumResponse,
+    DeleteResponse,
     Page,
     QueueTrackActionResponse,
     TrackOut,
 )
 from app.db import engine
 from app.downloader.m3u import regenerate_playlist_m3u
+from app.downloader.paths import cleanup_empty_dirs
 from app.downloader.ytdlp import SUPPORTED_FORMATS
-from app.models import Album, Artist, Playlist, PlaylistTrack, Track, TrackStatus
+from app.models import Album, Artist, Playlist, PlaylistTrack, QueueItem, Track, TrackStatus
 from app.resolver.musicbrainz import _release_rank
 from app.resolver.schemas import ResolvedAlbum, ResolvedTrack
+from app.settings_store import music_root
 from app import runtime
 
 router = APIRouter(prefix="/api/library", tags=["library"])
@@ -551,3 +555,122 @@ def download_track(track_id: str):
         session.commit()
     job_id = runtime.queue_service.enqueue_download(track_id)
     return QueueTrackActionResponse(track_id=track_id, job_id=job_id)
+
+
+# ── Deletion (Section 7.6, added 2026-07-16) ────────────────────────────────
+#
+# Lidarr/Sonarr pattern: every delete takes an explicit delete_files bool.
+# false (default) removes DB rows only, leaving any real file on disk
+# untracked. true also removes the real file(s) and cleans up any
+# now-empty Artist/Album folder left behind. Irreversible once delete_files
+# is true — the frontend must confirm before calling this with true.
+
+def _delete_file(file_path: str) -> None:
+    path = Path(file_path)
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+    cleanup_empty_dirs(path.parent, Path(music_root()))
+
+
+def _delete_track_cascade(session: Session, track: Track, delete_files: bool) -> set[str]:
+    """Removes one Track's PlaylistTrack memberships and QueueItem history
+    (both FK-reference the track — Section 9.1 enforces real FK constraints,
+    so these must go before the Track row does), optionally deletes the
+    real file, then deletes the Track row. Returns the ids of playlists
+    that need an M3U8 regen (Section 6.1) since they lost a member."""
+    affected = set(
+        session.exec(
+            select(PlaylistTrack.playlist_id).where(PlaylistTrack.track_id == track.id)
+        )
+    )
+    for link in session.exec(
+        select(PlaylistTrack).where(PlaylistTrack.track_id == track.id)
+    ).all():
+        session.delete(link)
+    for job in session.exec(
+        select(QueueItem).where(QueueItem.track_id == track.id)
+    ).all():
+        session.delete(job)
+    # Flush the child deletes before the Track delete: SQLAlchemy's unit of
+    # work only orders DELETEs across mapper types via configured
+    # relationship()s, which these plain Field(foreign_key=...) models
+    # don't have — without this, it can emit `DELETE FROM track` before the
+    # dependent playlisttrack/queueitem rows, tripping the real FK
+    # constraint (PRAGMA foreign_keys=ON, Section 9.1).
+    session.flush()
+    if delete_files and track.file_path:
+        _delete_file(track.file_path)
+    session.delete(track)
+    session.flush()
+    return affected
+
+
+def _regenerate_affected_playlists(session: Session, playlist_ids: set[str]) -> None:
+    for playlist_id in playlist_ids:
+        playlist = session.get(Playlist, playlist_id)
+        if playlist is not None:
+            regenerate_playlist_m3u(session, playlist)
+
+
+@router.delete("/tracks/{track_id}", response_model=DeleteResponse)
+def delete_track(track_id: str, delete_files: bool = False):
+    with Session(engine) as session:
+        track = session.get(Track, track_id)
+        if track is None:
+            raise HTTPException(404, "Track not found")
+        affected = _delete_track_cascade(session, track, delete_files)
+        session.commit()
+        _regenerate_affected_playlists(session, affected)
+    return DeleteResponse(id=track_id, files_deleted=delete_files, affected_playlists=len(affected))
+
+
+@router.delete("/albums/{album_id}", response_model=DeleteResponse)
+def delete_album(album_id: str, delete_files: bool = False):
+    with Session(engine) as session:
+        album = session.get(Album, album_id)
+        if album is None:
+            raise HTTPException(404, "Album not found")
+        tracks = session.exec(select(Track).where(Track.album_id == album_id)).all()
+        affected: set[str] = set()
+        for track in tracks:
+            affected |= _delete_track_cascade(session, track, delete_files)
+        session.delete(album)
+        session.flush()
+        session.commit()
+        _regenerate_affected_playlists(session, affected)
+    return DeleteResponse(
+        id=album_id,
+        files_deleted=delete_files,
+        cascaded_tracks=len(tracks),
+        affected_playlists=len(affected),
+    )
+
+
+@router.delete("/artists/{artist_id}", response_model=DeleteResponse)
+def delete_artist(artist_id: str, delete_files: bool = False):
+    with Session(engine) as session:
+        artist = session.get(Artist, artist_id)
+        if artist is None:
+            raise HTTPException(404, "Artist not found")
+        albums = session.exec(select(Album).where(Album.artist_id == artist_id)).all()
+        affected: set[str] = set()
+        track_count = 0
+        for album in albums:
+            tracks = session.exec(select(Track).where(Track.album_id == album.id)).all()
+            for track in tracks:
+                affected |= _delete_track_cascade(session, track, delete_files)
+                track_count += 1
+            session.delete(album)
+            session.flush()
+        session.delete(artist)
+        session.commit()
+        _regenerate_affected_playlists(session, affected)
+    return DeleteResponse(
+        id=artist_id,
+        files_deleted=delete_files,
+        cascaded_tracks=track_count,
+        cascaded_albums=len(albums),
+        affected_playlists=len(affected),
+    )

@@ -133,6 +133,65 @@ export function useDownloadTrack() {
   })
 }
 
+// ── Deletion (Section 7.6) ───────────────────────────────────────────────
+// Every delete takes an explicit deleteFiles boolean (Lidarr/Sonarr
+// pattern) — the frontend must confirm before ever passing true.
+
+export function useDeleteTrack() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ trackId, deleteFiles }) =>
+      api.del(`/api/library/tracks/${trackId}?delete_files=${deleteFiles}`),
+    onSuccess: (_data, { albumId }) => {
+      if (albumId) queryClient.invalidateQueries({ queryKey: ['albums', 'detail', albumId] })
+      queryClient.invalidateQueries({ queryKey: ['albums'] })
+      queryClient.invalidateQueries({ queryKey: ['playlists'] })
+      queryClient.invalidateQueries({ queryKey: ['queue'] })
+      queryClient.invalidateQueries({ queryKey: ['stats'] })
+    },
+  })
+}
+
+export function useDeleteAlbum() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ albumId, deleteFiles }) =>
+      api.del(`/api/library/albums/${albumId}?delete_files=${deleteFiles}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['albums'] })
+      queryClient.invalidateQueries({ queryKey: ['playlists'] })
+      queryClient.invalidateQueries({ queryKey: ['queue'] })
+      queryClient.invalidateQueries({ queryKey: ['stats'] })
+    },
+  })
+}
+
+export function useDeleteArtist() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ artistId, deleteFiles }) =>
+      api.del(`/api/library/artists/${artistId}?delete_files=${deleteFiles}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['albums'] })
+      queryClient.invalidateQueries({ queryKey: ['playlists'] })
+      queryClient.invalidateQueries({ queryKey: ['queue'] })
+      queryClient.invalidateQueries({ queryKey: ['stats'] })
+    },
+  })
+}
+
+export function useDeletePlaylist() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ playlistId, deleteFiles }) =>
+      api.del(`/api/library/playlists/${playlistId}?delete_files=${deleteFiles}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['playlists'] })
+      queryClient.invalidateQueries({ queryKey: ['stats'] })
+    },
+  })
+}
+
 export function useQueueTab(jobType, status, page = 0) {
   const params = new URLSearchParams({ job_type: jobType, limit: QUEUE_TAB_PAGE_SIZE, offset: page * QUEUE_TAB_PAGE_SIZE })
   if (status) params.set('status', status)
@@ -157,6 +216,19 @@ export function useCancelJob() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (jobId) => api.del(`/api/queue/${jobId}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['queue'] })
+      queryClient.invalidateQueries({ queryKey: ['stats'] })
+    },
+  })
+}
+
+// Section 7.6: bulk "Clear failed" / "Clear completed" — metadata-only,
+// never touches Track rows or files.
+export function useClearJobs() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (status) => api.post(`/api/queue/clear?status=${status}`, {}),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['queue'] })
       queryClient.invalidateQueries({ queryKey: ['stats'] })

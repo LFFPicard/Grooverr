@@ -3,12 +3,15 @@ Playlist endpoints (Section 5 Playlist/PlaylistTrack tables, added in the
 Batch 6/7 review to give "Complete this playlist" (Section 7.4) something
 to group against).
 """
+from pathlib import Path
+
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import case, func
 from sqlmodel import Session, select
 
 from app.api.schemas import (
     CompletePlaylistResponse,
+    DeleteResponse,
     Page,
     PlaylistDetail,
     PlaylistSummary,
@@ -121,3 +124,36 @@ def complete_playlist(playlist_id: str):
         runtime.queue_service.enqueue_download(track_id)
         queued += 1
     return CompletePlaylistResponse(playlist_id=playlist_id, queued_jobs=queued)
+
+
+@router.delete("/{playlist_id}", response_model=DeleteResponse)
+def delete_playlist(playlist_id: str, delete_files: bool = False):
+    """Section 7.6: removes the Playlist/PlaylistTrack rows. Never touches
+    the underlying tracks — those belong to their Album (Section 6) and may
+    be referenced by other playlists. delete_files here governs the
+    generated .m3u8 manifest itself (the only file a playlist "owns"),
+    mapped onto the same rule as every other entity: false leaves it on
+    disk untracked, true removes it too."""
+    with Session(engine) as session:
+        playlist = session.get(Playlist, playlist_id)
+        if playlist is None:
+            raise HTTPException(404, "Playlist not found")
+        links = session.exec(
+            select(PlaylistTrack).where(PlaylistTrack.playlist_id == playlist_id)
+        ).all()
+        for link in links:
+            session.delete(link)
+        # Flush before the Playlist delete: without a configured
+        # relationship(), the unit of work doesn't order DELETEs across
+        # mapper types by FK, so this must go first or PRAGMA
+        # foreign_keys=ON rejects `DELETE FROM playlist` (Section 9.1).
+        session.flush()
+        m3u_path = playlist.m3u_path
+        session.delete(playlist)
+        session.commit()
+    if delete_files and m3u_path:
+        try:
+            Path(m3u_path).unlink(missing_ok=True)
+        except OSError:
+            pass
+    return DeleteResponse(id=playlist_id, files_deleted=delete_files, cascaded_tracks=len(links))

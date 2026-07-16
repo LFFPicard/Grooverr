@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { useCompletePlaylist } from '../api/hooks'
+import { useCompletePlaylist, useDeletePlaylist } from '../api/hooks'
+import { ConfirmDeleteModal } from './ConfirmDeleteModal'
 import { LibraryCard } from './LibraryCard'
 
 function CompletePlaylistButton({ playlistId }) {
@@ -38,6 +39,38 @@ function m3uFileName(path) {
   return path.split(/[\\/]/).pop()
 }
 
+function DeletePlaylistButton({ playlist }) {
+  const [open, setOpen] = useState(false)
+  const mutation = useDeletePlaylist()
+
+  return (
+    <>
+      <button
+        onClick={(event) => {
+          event.preventDefault()
+          setOpen(true)
+        }}
+        className="text-[0.72rem] text-text-faint hover:text-danger self-start"
+      >
+        Delete playlist
+      </button>
+      <ConfirmDeleteModal
+        open={open}
+        busy={mutation.isPending}
+        title={`Delete “${playlist.name}”?`}
+        description="This removes the playlist. Its tracks stay in your library untouched — they may belong to other playlists or albums. Choose whether to also delete the generated .m3u8 manifest file from disk."
+        onCancel={() => setOpen(false)}
+        onConfirm={(deleteFiles) =>
+          mutation.mutate(
+            { playlistId: playlist.id, deleteFiles },
+            { onSuccess: () => setOpen(false) }
+          )
+        }
+      />
+    </>
+  )
+}
+
 export function PlaylistCard({ playlist }) {
   const isComplete = playlist.completeness === 'complete'
   const manifestName = m3uFileName(playlist.m3u_path)
@@ -64,6 +97,7 @@ export function PlaylistCard({ playlist }) {
               📄 Playlists/{manifestName}
             </div>
           )}
+          <DeletePlaylistButton playlist={playlist} />
         </div>
       }
     />
